@@ -16,18 +16,22 @@ export default async function handler(req, res) {
 
     const userText =
       mode === "celebrity"
-        ? `Analyze this outfit photo against this celebrity style profile.
+        ? `You are styling this user toward a celebrity reference.
 
 Celebrity: ${celebrityName}
-Profile: ${celebrityProfile}
+Celebrity style profile: ${celebrityProfile}
 
-Return strict JSON only.`
-        : `Analyze this outfit photo for the target style: ${targetStyle}.
+Analyze the actual outfit in the photo.
+Be concrete.
+Say what can stay, what must be swapped, what should be added, what to avoid, and how to restyle this exact outfit toward that celebrity.`
+        : `You are styling this user toward the target style: ${targetStyle}.
 
-Return strict JSON only.`;
+Analyze the actual outfit in the photo.
+Be concrete.
+Say what can stay, what must be swapped, what should be added, what to avoid, and how to restyle this exact outfit toward the target style.`;
 
     const schemaInstruction = `
-You are a fashion outfit analysis assistant.
+You are a premium fashion stylist.
 
 Return strict JSON only with this exact shape:
 {
@@ -36,18 +40,49 @@ Return strict JSON only with this exact shape:
   "colors": [],
   "materials": [],
   "styleTags": [],
-  "strengths": [],
-  "suggestions": []
+  "keep": [],
+  "swap": [
+    {
+      "from": "",
+      "to": "",
+      "why": ""
+    }
+  ],
+  "add": [],
+  "avoid": [],
+  "styleDirections": [],
+  "shopFor": [
+    {
+      "query": "",
+      "reason": ""
+    }
+  ]
 }
 
 Rules:
 - score must be an integer from 0 to 100
-- colors, materials, styleTags are arrays of short strings
-- strengths must contain exactly 2 short strings
-- suggestions must contain exactly 3 short strings
-- do not mention body type, torso, proportions, or skin tone
-- do not include markdown
-- do not include explanations outside JSON
+- detectedVibe should describe the outfit as it currently reads
+- keep = exact things that still work and can stay
+- swap = exact piece-by-piece replacements, not generic advice
+- add = exact missing pieces or accessories
+- avoid = exact things that cheapen or break the target style
+- styleDirections = 3 short specific styling paths for this exact outfit
+- shopFor = 3 useful shopping queries the app can later turn into product cards
+- do not mention body type, torso, proportions, skin tone, or attractiveness
+- do not output markdown
+- do not output explanations outside JSON
+- make the advice stylist-level, not generic ChatGPT summary language
+
+Good example of specific advice:
+- keep the black shorts
+- swap the sporty running sneaker for a low-profile leather sneaker
+- add a cropped leather jacket
+- style the same shorts with a fitted ribbed tank and narrow sunglasses
+
+Bad example:
+- elevate the look
+- choose premium footwear
+- add luxury accessories
 `;
 
     const response = await fetch("https://api.openai.com/v1/responses", {
@@ -122,8 +157,20 @@ Rules:
       colors: Array.isArray(parsed.colors) ? parsed.colors : [],
       materials: Array.isArray(parsed.materials) ? parsed.materials : [],
       styleTags: Array.isArray(parsed.styleTags) ? parsed.styleTags : [],
-      strengths: Array.isArray(parsed.strengths) ? parsed.strengths.slice(0, 2) : [],
-      suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.slice(0, 3) : []
+      keep: Array.isArray(parsed.keep) ? parsed.keep.slice(0, 4) : [],
+      swap: Array.isArray(parsed.swap)
+        ? parsed.swap
+            .filter(item => item && typeof item.from === "string" && typeof item.to === "string" && typeof item.why === "string")
+            .slice(0, 4)
+        : [],
+      add: Array.isArray(parsed.add) ? parsed.add.slice(0, 4) : [],
+      avoid: Array.isArray(parsed.avoid) ? parsed.avoid.slice(0, 4) : [],
+      styleDirections: Array.isArray(parsed.styleDirections) ? parsed.styleDirections.slice(0, 3) : [],
+      shopFor: Array.isArray(parsed.shopFor)
+        ? parsed.shopFor
+            .filter(item => item && typeof item.query === "string" && typeof item.reason === "string")
+            .slice(0, 3)
+        : []
     });
   } catch (error) {
     return res.status(500).json({
