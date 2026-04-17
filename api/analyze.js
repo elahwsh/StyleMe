@@ -16,13 +16,16 @@ export default async function handler(req, res) {
 
     const userText =
       mode === "celebrity"
-        ? `Style this outfit toward ${celebrityName}. Celebrity profile: ${celebrityProfile}. Be specific and concise.`
-        : `Style this outfit toward ${targetStyle}. Be specific and concise.`;
+        ? `Return JSON. Style this outfit toward ${celebrityName}. Profile: ${celebrityProfile}.`
+        : `Return JSON. Style this outfit toward ${targetStyle}.`;
 
-    const schemaInstruction = `
-You are a premium fashion stylist.
+    const systemInstruction = `
+Return JSON only.
 
-Return strict JSON only with this exact shape:
+You are a fashion stylist.
+
+Output EXACT JSON format:
+
 {
   "score": 0,
   "detectedVibe": "",
@@ -31,40 +34,21 @@ Return strict JSON only with this exact shape:
   "styleTags": [],
   "keep": [],
   "swap": [
-    {
-      "from": "",
-      "to": "",
-      "why": ""
-    }
+    { "from": "", "to": "", "why": "" }
   ],
   "add": [],
   "avoid": [],
   "styleDirections": [],
   "shopFor": [
-    {
-      "query": "",
-      "reason": ""
-    }
+    { "query": "", "reason": "" }
   ]
 }
 
 Rules:
-- Be fast and concise.
-- Score must be an integer from 0 to 100.
-- keep: max 3 items.
-- swap: max 2 items.
-- add: max 3 items.
-- avoid: max 2 items.
-- styleDirections: exactly 2 short styling directions.
-- shopFor: exactly 3 shopping queries.
-- Do not mention body type, torso, proportions, skin tone, or attractiveness.
-- Do not output markdown.
-- Do not output explanations outside JSON.
-- Make swaps concrete, not generic.
+- Be short and specific
+- No explanations
+- JSON ONLY
 `;
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 35000);
 
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -74,20 +58,21 @@ Rules:
       },
       body: JSON.stringify({
         model: "gpt-4.1-mini",
-        instructions: schemaInstruction,
+
+        // ✅ THIS FIXES YOUR ERROR
         text: {
-          format: {
-            type: "json_object"
-          }
+          format: { type: "json_object" }
         },
+
         input: [
+          {
+            role: "system",
+            content: [{ type: "input_text", text: systemInstruction }]
+          },
           {
             role: "user",
             content: [
-              {
-                type: "input_text",
-                text: userText
-              },
+              { type: "input_text", text: userText },
               {
                 type: "input_image",
                 detail: "low",
@@ -96,11 +81,8 @@ Rules:
             ]
           }
         ]
-      }),
-      signal: controller.signal
+      })
     });
-
-    clearTimeout(timeout);
 
     const data = await response.json();
 
@@ -112,15 +94,12 @@ Rules:
       data.output_text ??
       data.output
         ?.flatMap(item => item.content ?? [])
-        ?.map(content => content.text || "")
+        ?.map(c => c.text || "")
         ?.join("")
         ?.trim();
 
     if (!outputText) {
-      return res.status(500).json({
-        error: "No output text returned from OpenAI",
-        raw: data
-      });
+      return res.status(500).json({ error: "No output text" });
     }
 
     let parsed;
@@ -128,35 +107,16 @@ Rules:
       parsed = JSON.parse(outputText);
     } catch {
       return res.status(500).json({
-        error: "Failed to parse JSON from model output",
-        outputText
+        error: "Invalid JSON from model",
+        raw: outputText
       });
     }
 
-    return res.status(200).json({
-      score: Number.isInteger(parsed.score) ? parsed.score : 0,
-      detectedVibe: typeof parsed.detectedVibe === "string" ? parsed.detectedVibe : "",
-      colors: Array.isArray(parsed.colors) ? parsed.colors.slice(0, 4) : [],
-      materials: Array.isArray(parsed.materials) ? parsed.materials.slice(0, 4) : [],
-      styleTags: Array.isArray(parsed.styleTags) ? parsed.styleTags.slice(0, 4) : [],
-      keep: Array.isArray(parsed.keep) ? parsed.keep.slice(0, 3) : [],
-      swap: Array.isArray(parsed.swap)
-        ? parsed.swap
-            .filter(item => item && typeof item.from === "string" && typeof item.to === "string" && typeof item.why === "string")
-            .slice(0, 2)
-        : [],
-      add: Array.isArray(parsed.add) ? parsed.add.slice(0, 3) : [],
-      avoid: Array.isArray(parsed.avoid) ? parsed.avoid.slice(0, 2) : [],
-      styleDirections: Array.isArray(parsed.styleDirections) ? parsed.styleDirections.slice(0, 2) : [],
-      shopFor: Array.isArray(parsed.shopFor)
-        ? parsed.shopFor
-            .filter(item => item && typeof item.query === "string" && typeof item.reason === "string")
-            .slice(0, 3)
-        : []
-    });
-  } catch (error) {
+    return res.status(200).json(parsed);
+
+  } catch (err) {
     return res.status(500).json({
-      error: error?.name === "AbortError" ? "OpenAI request timed out" : (error?.message || "Server error")
+      error: err.message || "Server error"
     });
   }
 }
