@@ -1,3 +1,14 @@
+function normalizeScore(score) {
+  if (score == null || Number.isNaN(Number(score))) return 0;
+  const numeric = Math.round(Number(score));
+  if (numeric > 0 && numeric <= 10) return Math.min(100, numeric * 10);
+  return Math.max(0, Math.min(100, numeric));
+}
+
+function safeArray(value, max = 4) {
+  return Array.isArray(value) ? value.slice(0, max) : [];
+}
+
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
@@ -16,13 +27,13 @@ export default async function handler(req, res) {
 
     const userText =
       mode === "celebrity"
-        ? `Return JSON. Style this outfit toward ${celebrityName}. Profile: ${celebrityProfile}.`
-        : `Return JSON. Style this outfit toward ${targetStyle}.`;
+        ? `Return JSON. Style this outfit toward ${celebrityName}. Celebrity profile: ${celebrityProfile}. Be specific, fast, and concise.`
+        : `Return JSON. Style this outfit toward ${targetStyle}. Be specific, fast, and concise.`;
 
     const systemInstruction = `
 Return JSON only.
 
-You are a fashion stylist.
+You are a premium fashion stylist.
 
 Output EXACT JSON format:
 
@@ -45,10 +56,21 @@ Output EXACT JSON format:
 }
 
 Rules:
-- Be short and specific
-- No explanations
-- JSON ONLY
+- Be short and specific.
+- Score must be 0 to 100.
+- Keep max 3 items.
+- Swap max 2 items.
+- Add max 3 items.
+- Avoid max 2 items.
+- StyleDirections exactly 2 short directions.
+- ShopFor exactly 3 short shopping queries.
+- Do not mention body type, torso, proportions, skin tone, or attractiveness.
+- No markdown.
+- No explanations outside JSON.
 `;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 25000);
 
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -58,16 +80,15 @@ Rules:
       },
       body: JSON.stringify({
         model: "gpt-4.1-mini",
-
-        // ✅ THIS FIXES YOUR ERROR
         text: {
           format: { type: "json_object" }
         },
-
         input: [
           {
             role: "system",
-            content: [{ type: "input_text", text: systemInstruction }]
+            content: [
+              { type: "input_text", text: systemInstruction }
+            ]
           },
           {
             role: "user",
@@ -81,8 +102,11 @@ Rules:
             ]
           }
         ]
-      })
+      }),
+      signal: controller.signal
     });
+
+    clearTimeout(timeout);
 
     const data = await response.json();
 
@@ -94,12 +118,15 @@ Rules:
       data.output_text ??
       data.output
         ?.flatMap(item => item.content ?? [])
-        ?.map(c => c.text || "")
+        ?.map(content => content.text || "")
         ?.join("")
         ?.trim();
 
     if (!outputText) {
-      return res.status(500).json({ error: "No output text" });
+      return res.status(500).json({
+        error: "No output text returned from OpenAI",
+        raw: data
+      });
     }
 
     let parsed;
@@ -112,11 +139,39 @@ Rules:
       });
     }
 
-    return res.status(200).json(parsed);
-
-  } catch (err) {
+    return res.status(200).json({
+      score: normalizeScore(parsed.score),
+      detectedVibe: typeof parsed.detectedVibe === "string" ? parsed.detectedVibe : "",
+      colors: safeArray(parsed.colors, 4),
+      materials: safeArray(parsed.materials, 4),
+      styleTags: safeArray(parsed.styleTags, 4),
+      keep: safeArray(parsed.keep, 3),
+      swap: Array.isArray(parsed.swap)
+        ? parsed.swap
+            .filter(item =>
+              item &&
+              typeof item.from === "string" &&
+              typeof item.to === "string" &&
+              typeof item.why === "string"
+            )
+            .slice(0, 2)
+        : [],
+      add: safeArray(parsed.add, 3),
+      avoid: safeArray(parsed.avoid, 2),
+      styleDirections: safeArray(parsed.styleDirections, 2),
+      shopFor: Array.isArray(parsed.shopFor)
+        ? parsed.shopFor
+            .filter(item =>
+              item &&
+              typeof item.query === "string" &&
+              typeof item.reason === "string"
+            )
+            .slice(0, 3)
+        : []
+    });
+  } catch (error) {
     return res.status(500).json({
-      error: err.message || "Server error"
+      error: error?.name === "AbortError" ? "OpenAI request timed out" : (error?.message || "Server error")
     });
   }
 }
