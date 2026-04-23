@@ -1,6 +1,6 @@
 let ebayTokenCache = {
   accessToken: null,
-  expiresAt: 0
+ expiresAt: 0
 };
 
 function sanitizeText(value, fallback = "") {
