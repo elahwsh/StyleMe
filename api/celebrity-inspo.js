@@ -12,9 +12,31 @@ function makeId(value) {
 function normalize(value) {
   return clean(value)
     .toLowerCase()
-    .replace(/[^a-z0-9 ]/g, "")
+    .replace(/[^a-z0-9 ]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function domainOf(url) {
+  try {
+    return new URL(url).hostname.replace("www.", "");
+  } catch {
+    return "";
+  }
+}
+
+function similarity(a, b) {
+  const aw = new Set(normalize(a).split(" ").filter(w => w.length > 2));
+  const bw = new Set(normalize(b).split(" ").filter(w => w.length > 2));
+
+  if (aw.size === 0 || bw.size === 0) return 0;
+
+  let same = 0;
+  for (const word of aw) {
+    if (bw.has(word)) same++;
+  }
+
+  return same / Math.min(aw.size, bw.size);
 }
 
 function isBadResult(item, celebrity) {
@@ -33,7 +55,6 @@ function isBadResult(item, celebrity) {
     "store",
     "sale",
     "resell",
-    "limited resell",
     "depop",
     "poshmark",
     "ebay",
@@ -49,11 +70,13 @@ function isBadResult(item, celebrity) {
   }
 
   const celebParts = celebrity.toLowerCase().split(" ").filter(Boolean);
-  const mentionsCelebrity = celebParts.some(part => title.includes(part)) || celebParts.some(part => link.includes(part));
+  const mentionsCelebrity =
+    celebParts.some(part => title.includes(part)) ||
+    celebParts.some(part => link.includes(part));
 
   if (!mentionsCelebrity) return true;
 
-  const image = clean(item.original) || clean(item.thumbnail);
+  const image = clean(item.thumbnail) || clean(item.original);
   if (!image) return true;
 
   return false;
@@ -99,7 +122,7 @@ export default async function handler(req, res) {
 
       const images = Array.isArray(data.images_results) ? data.images_results : [];
 
-      for (const item of images.slice(0, 20)) {
+      for (const item of images.slice(0, 25)) {
         if (isBadResult(item, celebrity)) continue;
 
         const imageUrl = clean(item.thumbnail) || clean(item.original);
@@ -110,7 +133,7 @@ export default async function handler(req, res) {
         if (!imageUrl || !sourceUrl) continue;
 
         allItems.push({
-          id: makeId(imageUrl + sourceUrl),
+          id: makeId(imageUrl + sourceUrl + title),
           title,
           imageUrl,
           sourceUrl,
@@ -120,39 +143,35 @@ export default async function handler(req, res) {
       }
     }
 
-   const seenKeys = new Set();
-const unique = [];
+    const unique = [];
 
-for (const item of allItems) {
-  const titleKey = normalize(item.title)
-    .replace(/\b(the|a|an|her|his|wears|wearing|like|pro|style|outfit)\b/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 38);
+    for (const item of allItems) {
+      const itemDomain = domainOf(item.sourceUrl);
+      const itemImage = item.imageUrl.split("?")[0];
 
-  const sourceKey = normalize(item.source);
-  const linkPath = clean(item.sourceUrl)
-    .toLowerCase()
-    .replace(/^https?:\/\//, "")
-    .replace(/^www\./, "")
-    .split("?")[0]
-    .split("#")[0];
+      const duplicate = unique.some(existing => {
+        const existingDomain = domainOf(existing.sourceUrl);
+        const existingImage = existing.imageUrl.split("?")[0];
 
-  const combinedKey = `${titleKey}|${sourceKey}`;
+        const sameImage = existingImage === itemImage;
+        const sameDomainAndSimilarTitle =
+          existingDomain === itemDomain &&
+          similarity(existing.title, item.title) >= 0.45;
 
-  if (seenKeys.has(titleKey)) continue;
-  if (seenKeys.has(combinedKey)) continue;
-  if (seenKeys.has(linkPath)) continue;
+        const verySimilarTitle = similarity(existing.title, item.title) >= 0.65;
 
-  seenKeys.add(titleKey);
-  seenKeys.add(combinedKey);
-  seenKeys.add(linkPath);
+        return sameImage || sameDomainAndSimilarTitle || verySimilarTitle;
+      });
 
-  unique.push(item);
-}
+      if (!duplicate) {
+        unique.push(item);
+      }
+
+      if (unique.length >= 4) break;
+    }
 
     return res.status(200).json({
-      items: unique.slice(0, 6)
+      items: unique
     });
   } catch (error) {
     return res.status(500).json({
