@@ -25,10 +25,11 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing imageBase64" });
     }
 
-    const userText =
-      mode === "celebrity"
-        ? `Return JSON. Style this outfit toward ${celebrityName}. Celebrity profile: ${celebrityProfile}. Be specific, fast, and concise.`
-        : `Return JSON. Style this outfit toward ${targetStyle}. Be specific, fast, and concise.`;
+    const isCelebrity = mode === "celebrity";
+
+    const userText = isCelebrity
+      ? `Return JSON. The user wants this outfit restyled toward ${celebrityName}. Celebrity profile: ${celebrityProfile}. Also create image-search queries to find real photos of ${celebrityName} wearing similar outfits/items/vibes.`
+      : `Return JSON. Style this outfit toward ${targetStyle}. Be specific, fast, and concise.`;
 
     const systemInstruction = `
 Return JSON only.
@@ -52,7 +53,8 @@ Output EXACT JSON format:
   "styleDirections": [],
   "shopFor": [
     { "query": "", "reason": "" }
-  ]
+  ],
+  "celebrityInspoQueries": []
 }
 
 Rules:
@@ -64,6 +66,10 @@ Rules:
 - Avoid max 2 items.
 - StyleDirections exactly 2 short directions.
 - ShopFor exactly 3 short shopping queries.
+- If mode is celebrity, celebrityInspoQueries must contain exactly 4 Google-image-style search queries.
+- Each celebrityInspoQueries item must include the celebrity name and similar clothing/vibe from the uploaded outfit.
+- Example: "Hailey Bieber black blazer jeans street style"
+- If mode is not celebrity, celebrityInspoQueries can be [].
 - Do not mention body type, torso, proportions, skin tone, or attractiveness.
 - No markdown.
 - No explanations outside JSON.
@@ -167,7 +173,8 @@ Rules:
               typeof item.reason === "string"
             )
             .slice(0, 3)
-        : []
+        : [],
+      celebrityInspoQueries: safeArray(parsed.celebrityInspoQueries, 4)
     });
   } catch (error) {
     return res.status(500).json({
