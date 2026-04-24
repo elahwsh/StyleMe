@@ -105,7 +105,7 @@ export default async function handler(req, res) {
       for (const item of images.slice(0, 12)) {
         if (isBadResult(item, celebrity)) continue;
 
-        const imageUrl = clean(item.original) || clean(item.thumbnail);
+        const imageUrl = clean(item.thumbnail) || clean(item.original);
         const sourceUrl = clean(item.link);
         const title = clean(item.title, `${celebrity} outfit inspo`);
         const source = clean(item.source, "Celebrity Inspo");
