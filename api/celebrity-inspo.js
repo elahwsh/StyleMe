@@ -3,7 +3,55 @@ function clean(value, fallback = "") {
 }
 
 function makeId(value) {
-  return Buffer.from(value).toString("base64").replace(/[^a-zA-Z0-9]/g, "").slice(0, 28);
+  return Buffer.from(value)
+    .toString("base64")
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .slice(0, 28);
+}
+
+function isBadResult(item, celebrity) {
+  const title = clean(item.title).toLowerCase();
+  const source = clean(item.source).toLowerCase();
+  const link = clean(item.link).toLowerCase();
+  const imageUrl = (clean(item.original) || clean(item.thumbnail)).toLowerCase();
+
+  const celebWords = celebrity.toLowerCase().split(" ").filter(Boolean);
+  const mentionsCelebrity =
+    celebWords.some(word => title.includes(word)) ||
+    celebWords.some(word => link.includes(word));
+
+  const badWords = [
+    "tiktok",
+    "pinterest",
+    "resell",
+    "limited resell",
+    "trainer",
+    "sneaker",
+    "sale",
+    "shop",
+    "buy",
+    "store",
+    "ebay",
+    "poshmark",
+    "depop",
+    "amazon",
+    "walmart",
+    "quiz",
+    "game",
+    "reddit"
+  ];
+
+  const isBadSource = badWords.some(word =>
+    title.includes(word) ||
+    source.includes(word) ||
+    link.includes(word)
+  );
+
+  const isImageBad =
+    imageUrl.includes("gstatic") ||
+    imageUrl.includes("encrypted-tbn");
+
+  return !mentionsCelebrity || isBadSource || isImageBad;
 }
 
 export default async function handler(req, res) {
@@ -35,8 +83,8 @@ export default async function handler(req, res) {
 
     for (const query of queries) {
       const searchQuery = query.toLowerCase().includes(celebrity.toLowerCase())
-        ? query
-        : `${celebrity} ${query} outfit street style`;
+        ? `${query} outfit street style paparazzi`
+        : `${celebrity} ${query} outfit street style paparazzi`;
 
       const url = new URL("https://serpapi.com/search.json");
       url.searchParams.set("engine", "google_images");
@@ -48,19 +96,19 @@ export default async function handler(req, res) {
       const response = await fetch(url.toString());
       const data = await response.json();
 
-      if (!response.ok) {
-        continue;
-      }
+      if (!response.ok) continue;
 
       const images = Array.isArray(data.images_results)
         ? data.images_results
         : [];
 
-      for (const item of images.slice(0, 4)) {
+      for (const item of images.slice(0, 12)) {
+        if (isBadResult(item, celebrity)) continue;
+
         const imageUrl = clean(item.original) || clean(item.thumbnail);
-        const sourceUrl = clean(item.link) || clean(item.source);
+        const sourceUrl = clean(item.link);
         const title = clean(item.title, `${celebrity} outfit inspo`);
-        const source = clean(item.source, "Inspo");
+        const source = clean(item.source, "Celebrity Inspo");
 
         if (!imageUrl || !sourceUrl) continue;
 
@@ -87,7 +135,7 @@ export default async function handler(req, res) {
     }
 
     return res.status(200).json({
-      items: unique.slice(0, 10)
+      items: unique.slice(0, 8)
     });
   } catch (error) {
     return res.status(500).json({
