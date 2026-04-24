@@ -120,26 +120,36 @@ export default async function handler(req, res) {
       }
     }
 
-    const seenImages = new Set();
-    const seenTitles = new Set();
-    const seenLinks = new Set();
-    const unique = [];
+   const seenKeys = new Set();
+const unique = [];
 
-    for (const item of allItems) {
-      const imageKey = item.imageUrl.split("?")[0];
-      const titleKey = normalize(item.title).slice(0, 55);
-      const linkKey = item.sourceUrl.split("?")[0];
+for (const item of allItems) {
+  const titleKey = normalize(item.title)
+    .replace(/\b(the|a|an|her|his|wears|wearing|like|pro|style|outfit)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 38);
 
-      if (seenImages.has(imageKey)) continue;
-      if (seenTitles.has(titleKey)) continue;
-      if (seenLinks.has(linkKey)) continue;
+  const sourceKey = normalize(item.source);
+  const linkPath = clean(item.sourceUrl)
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .split("?")[0]
+    .split("#")[0];
 
-      seenImages.add(imageKey);
-      seenTitles.add(titleKey);
-      seenLinks.add(linkKey);
+  const combinedKey = `${titleKey}|${sourceKey}`;
 
-      unique.push(item);
-    }
+  if (seenKeys.has(titleKey)) continue;
+  if (seenKeys.has(combinedKey)) continue;
+  if (seenKeys.has(linkPath)) continue;
+
+  seenKeys.add(titleKey);
+  seenKeys.add(combinedKey);
+  seenKeys.add(linkPath);
+
+  unique.push(item);
+}
 
     return res.status(200).json({
       items: unique.slice(0, 6)
