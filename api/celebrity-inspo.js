@@ -9,49 +9,54 @@ function makeId(value) {
     .slice(0, 28);
 }
 
+function normalize(value) {
+  return clean(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function isBadResult(item, celebrity) {
-  const title = clean(item.title).toLowerCase();
-  const source = clean(item.source).toLowerCase();
+  const title = normalize(item.title);
+  const source = normalize(item.source);
   const link = clean(item.link).toLowerCase();
-  const imageUrl = (clean(item.original) || clean(item.thumbnail)).toLowerCase();
 
-  const celebWords = celebrity.toLowerCase().split(" ").filter(Boolean);
-  const mentionsCelebrity =
-    celebWords.some(word => title.includes(word)) ||
-    celebWords.some(word => link.includes(word));
-
-  const badWords = [
+  const banned = [
+    "facebook",
+    "instagram",
     "tiktok",
     "pinterest",
+    "reddit",
+    "youtube",
+    "shop",
+    "store",
+    "sale",
     "resell",
     "limited resell",
-    "trainer",
-    "sneaker",
-    "sale",
-    "shop",
-    "buy",
-    "store",
-    "ebay",
-    "poshmark",
     "depop",
+    "poshmark",
+    "ebay",
     "amazon",
     "walmart",
     "quiz",
     "game",
-    "reddit"
+    "wiki"
   ];
 
-  const isBadSource = badWords.some(word =>
-    title.includes(word) ||
-    source.includes(word) ||
-    link.includes(word)
-  );
+  if (banned.some(word => title.includes(word) || source.includes(word) || link.includes(word))) {
+    return true;
+  }
 
-  const isImageBad =
-    imageUrl.includes("gstatic") ||
-    imageUrl.includes("encrypted-tbn");
+  const celebParts = celebrity.toLowerCase().split(" ").filter(Boolean);
+  const mentionsCelebrity = celebParts.some(part => title.includes(part)) || celebParts.some(part => link.includes(part));
 
-  return !mentionsCelebrity || isBadSource || isImageBad;
+  if (!mentionsCelebrity) return true;
+
+  const image = clean(item.original) || clean(item.thumbnail);
+  if (!image) return true;
+
+  return false;
 }
 
 export default async function handler(req, res) {
@@ -72,19 +77,13 @@ export default async function handler(req, res) {
     }
 
     const queries = rawQueries
-      ? rawQueries
-          .split("|||")
-          .map(q => clean(q))
-          .filter(Boolean)
-          .slice(0, 4)
-      : [`${celebrity} outfit street style`];
+      ? rawQueries.split("|||").map(q => clean(q)).filter(Boolean).slice(0, 4)
+      : [`${celebrity} street style outfit`];
 
     const allItems = [];
 
     for (const query of queries) {
-      const searchQuery = query.toLowerCase().includes(celebrity.toLowerCase())
-        ? `${query} outfit street style paparazzi`
-        : `${celebrity} ${query} outfit street style paparazzi`;
+      const searchQuery = `${query} -facebook -instagram -tiktok -pinterest -resell -shop`;
 
       const url = new URL("https://serpapi.com/search.json");
       url.searchParams.set("engine", "google_images");
@@ -98,11 +97,9 @@ export default async function handler(req, res) {
 
       if (!response.ok) continue;
 
-      const images = Array.isArray(data.images_results)
-        ? data.images_results
-        : [];
+      const images = Array.isArray(data.images_results) ? data.images_results : [];
 
-      for (const item of images.slice(0, 12)) {
+      for (const item of images.slice(0, 20)) {
         if (isBadResult(item, celebrity)) continue;
 
         const imageUrl = clean(item.thumbnail) || clean(item.original);
@@ -123,19 +120,29 @@ export default async function handler(req, res) {
       }
     }
 
-    const seen = new Set();
+    const seenImages = new Set();
+    const seenTitles = new Set();
+    const seenLinks = new Set();
     const unique = [];
 
     for (const item of allItems) {
-      const key = item.imageUrl;
-      if (!seen.has(key)) {
-        seen.add(key);
-        unique.push(item);
-      }
+      const imageKey = item.imageUrl.split("?")[0];
+      const titleKey = normalize(item.title).slice(0, 55);
+      const linkKey = item.sourceUrl.split("?")[0];
+
+      if (seenImages.has(imageKey)) continue;
+      if (seenTitles.has(titleKey)) continue;
+      if (seenLinks.has(linkKey)) continue;
+
+      seenImages.add(imageKey);
+      seenTitles.add(titleKey);
+      seenLinks.add(linkKey);
+
+      unique.push(item);
     }
 
     return res.status(200).json({
-      items: unique.slice(0, 8)
+      items: unique.slice(0, 6)
     });
   } catch (error) {
     return res.status(500).json({
