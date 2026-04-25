@@ -17,106 +17,136 @@ function normalize(value) {
     .trim();
 }
 
-function domainOf(url) {
-  try {
-    return new URL(url).hostname.replace("www.", "");
-  } catch {
-    return "";
-  }
-}
-
-function getImportantWords(query, celebrity) {
-  const banned = new Set([
-    ...celebrity.toLowerCase().split(" "),
-    "outfit", "style", "street", "wearing", "wears", "look",
-    "fashion", "celebrity", "inspo", "inspiration", "the", "and",
-    "with", "for", "her", "his", "this", "that"
-  ]);
-
-  return normalize(query)
-    .split(" ")
-    .filter(word => word.length > 3 && !banned.has(word));
-}
-
-function isBadResult(item, celebrity, query) {
+function isObviouslyBad(item, celebrity) {
   const title = normalize(item.title);
   const source = normalize(item.source);
   const link = clean(item.link).toLowerCase();
   const combined = `${title} ${source} ${link}`;
 
-  const bannedSources = [
+  const banned = [
     "facebook",
-    "instagram",
     "tiktok",
-    "pinterest",
     "reddit",
     "youtube",
-    "shop",
-    "store",
-    "sale",
-    "resell",
-    "depop",
-    "poshmark",
-    "ebay",
-    "amazon",
-    "walmart",
     "quiz",
     "game",
     "wiki",
-    "engagement ring",
     "boyfriend",
-    "dating",
-    "news only"
+    "engagement",
+    "dating"
   ];
 
-  if (bannedSources.some(word => combined.includes(word))) {
-    return true;
-  }
+  if (banned.some(word => combined.includes(word))) return true;
 
-  const celebParts = celebrity.toLowerCase().split(" ").filter(Boolean);
+  const celebWords = celebrity.toLowerCase().split(" ").filter(Boolean);
   const mentionsCelebrity =
-    celebParts.some(part => title.includes(part)) ||
-    celebParts.some(part => link.includes(part));
+    celebWords.some(word => title.includes(word)) ||
+    celebWords.some(word => link.includes(word));
 
-  if (!mentionsCelebrity) return true;
-
-  const image = clean(item.thumbnail) || clean(item.original);
-  if (!image) return true;
-
-  const importantWords = getImportantWords(query, celebrity);
-
-  const clothingWords = [
-    "skirt", "mini", "dress", "corset", "blazer", "jacket",
-    "leather", "denim", "jeans", "pants", "trousers", "boots",
-    "heels", "flats", "sneakers", "tank", "crop", "top",
-    "black", "white", "cream", "silver", "gold", "oversized",
-    "fitted", "sunglasses", "jewelry"
-  ];
-
-  const relevantWords = importantWords.filter(word =>
-    clothingWords.includes(word) || clothingWords.some(c => word.includes(c) || c.includes(word))
-  );
-
-  if (relevantWords.length > 0) {
-    const matches = relevantWords.filter(word => combined.includes(word));
-    if (matches.length === 0) return true;
-  }
-
-  return false;
+  return !mentionsCelebrity;
 }
 
-function similarity(a, b) {
-  const aw = new Set(normalize(a).split(" ").filter(w => w.length > 2));
-  const bw = new Set(normalize(b).split(" ").filter(w => w.length > 2));
+function isDuplicate(candidate, selected) {
+  const title = normalize(candidate.title);
+  const image = candidate.imageUrl.split("?")[0];
 
-  if (aw.size === 0 || bw.size === 0) return 0;
+  return selected.some(item => {
+    const otherTitle = normalize(item.title);
+    const otherImage = item.imageUrl.split("?")[0];
 
-  let same = 0;
-  for (const word of aw) {
-    if (bw.has(word)) same++;
+    if (image === otherImage) return true;
+    if (title && otherTitle && title.slice(0, 45) === otherTitle.slice(0, 45)) return true;
+
+    return false;
+  });
+}
+
+async function aiFilterCandidates({ celebrity, queries, candidates }) {
+  if (!process.env.OPENAI_API_KEY) {
+    return candidates.slice(0, 4);
   }
 
-  return same / Math.min(aw.size, bw.size);
+  const candidateText = candidates
+    .map((item, index) => {
+      return `${index}: title="${item.title}", source="${item.source}", query="${item.query}"`;
+    })
+    .join("\n");
+
+  const prompt = `
+You are filtering celebrity outfit inspiration results.
+
+Celebrity: ${celebrity}
+
+The user wants images of this celebrity wearing outfits similar to:
+${queries.join("\n")}
+
+Candidates:
+${candidateText}
+
+Return JSON only:
+{
+  "keepIndexes": [0, 1, 2]
+}
+
+Rules:
+- Keep only images that are likely actual outfit inspiration of ${celebrity}.
+- Remove unrelated news, engagement, random event photos, duplicate-looking results, shopping/resell pages.
+- Prefer street style, outfit articles, paparazzi style, fashion magazine outfit references.
+- Prefer results matching the clothing terms in the queries.
+- Keep max 4.
+- If unsure, keep fewer.
+`;
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: "gpt-4.1-mini",
+        text: {
+          format: { type: "json_object" }
+        },
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: prompt }
+            ]
+          }
+        ]
+      })
+    });
+
+    const data = await response.json();
+
+    const outputText =
+      data.output_text ??
+      data.output
+        ?.flatMap(item => item.content ?? [])
+        ?.map(content => content.text || "")
+        ?.join("")
+        ?.trim();
+
+    if (!response.ok || !outputText) {
+      return candidates.slice(0, 4);
+    }
+
+    const parsed = JSON.parse(outputText);
+    const indexes = Array.isArray(parsed.keepIndexes) ? parsed.keepIndexes : [];
+
+    const selected = indexes
+      .filter(index => Number.isInteger(index))
+      .map(index => candidates[index])
+      .filter(Boolean)
+      .slice(0, 4);
+
+    return selected.length > 0 ? selected : candidates.slice(0, 4);
+  } catch {
+    return candidates.slice(0, 4);
+  }
 }
 
 export default async function handler(req, res) {
@@ -137,13 +167,19 @@ export default async function handler(req, res) {
     }
 
     const queries = rawQueries
-      ? rawQueries.split("|||").map(q => clean(q)).filter(Boolean).slice(0, 4)
-      : [`${celebrity} street style outfit`];
+      ? rawQueries
+          .split("|||")
+          .map(q => clean(q))
+          .filter(Boolean)
+          .slice(0, 4)
+      : [`${celebrity} outfit street style`];
 
-    const allItems = [];
+    const allCandidates = [];
 
     for (const query of queries) {
-      const searchQuery = `${query} celebrity outfit -facebook -instagram -tiktok -pinterest -shop -resell`;
+      const searchQuery = query.toLowerCase().includes(celebrity.toLowerCase())
+        ? `${query} outfit street style`
+        : `${celebrity} ${query} outfit street style`;
 
       const url = new URL("https://serpapi.com/search.json");
       url.searchParams.set("engine", "google_images");
@@ -157,50 +193,52 @@ export default async function handler(req, res) {
 
       if (!response.ok) continue;
 
-      const images = Array.isArray(data.images_results) ? data.images_results : [];
+      const images = Array.isArray(data.images_results)
+        ? data.images_results
+        : [];
 
-      for (const item of images.slice(0, 30)) {
-        if (isBadResult(item, celebrity, query)) continue;
+      for (const item of images.slice(0, 8)) {
+        if (isObviouslyBad(item, celebrity)) continue;
 
         const imageUrl = clean(item.thumbnail) || clean(item.original);
         const sourceUrl = clean(item.link);
         const title = clean(item.title, `${celebrity} outfit inspo`);
         const source = clean(item.source, "Celebrity Inspo");
 
-        allItems.push({
+        if (!imageUrl || !sourceUrl) continue;
+
+        const candidate = {
           id: makeId(imageUrl + sourceUrl + title),
           title,
           imageUrl,
           sourceUrl,
           source,
           query: searchQuery
-        });
+        };
+
+        if (!isDuplicate(candidate, allCandidates)) {
+          allCandidates.push(candidate);
+        }
       }
     }
 
-    const unique = [];
+    const aiSelected = await aiFilterCandidates({
+      celebrity,
+      queries,
+      candidates: allCandidates.slice(0, 12)
+    });
 
-    for (const item of allItems) {
-      const itemDomain = domainOf(item.sourceUrl);
-      const itemImage = item.imageUrl.split("?")[0];
+    const finalItems = [];
 
-      const duplicate = unique.some(existing => {
-        const existingDomain = domainOf(existing.sourceUrl);
-        const existingImage = existing.imageUrl.split("?")[0];
-
-        return (
-          existingImage === itemImage ||
-          similarity(existing.title, item.title) >= 0.55 ||
-          (existingDomain === itemDomain && similarity(existing.title, item.title) >= 0.35)
-        );
-      });
-
-      if (!duplicate) unique.push(item);
-      if (unique.length >= 3) break;
+    for (const item of aiSelected) {
+      if (!isDuplicate(item, finalItems)) {
+        finalItems.push(item);
+      }
+      if (finalItems.length >= 4) break;
     }
 
     return res.status(200).json({
-      items: unique
+      items: finalItems
     });
   } catch (error) {
     return res.status(500).json({
