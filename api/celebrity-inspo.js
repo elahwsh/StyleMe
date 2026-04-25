@@ -33,12 +33,18 @@ function isObviouslyBad(item, celebrity) {
     "wiki",
     "boyfriend",
     "engagement",
-    "dating"
+    "dating",
+    "adult",
+    "porn",
+    "nsfw"
   ];
 
-  if (banned.some(word => combined.includes(word))) return true;
+  if (banned.some(word => combined.includes(word))) {
+    return true;
+  }
 
   const celebWords = celebrity.toLowerCase().split(" ").filter(Boolean);
+
   const mentionsCelebrity =
     celebWords.some(word => title.includes(word)) ||
     celebWords.some(word => link.includes(word));
@@ -47,106 +53,66 @@ function isObviouslyBad(item, celebrity) {
 }
 
 function isDuplicate(candidate, selected) {
-  const title = normalize(candidate.title);
-  const image = candidate.imageUrl.split("?")[0];
+  const candidateTitle = normalize(candidate.title);
+  const candidateImage = candidate.imageUrl.split("?")[0];
+  const candidateSource = normalize(candidate.source);
 
   return selected.some(item => {
-    const otherTitle = normalize(item.title);
-    const otherImage = item.imageUrl.split("?")[0];
+    const itemTitle = normalize(item.title);
+    const itemImage = item.imageUrl.split("?")[0];
+    const itemSource = normalize(item.source);
 
-    if (image === otherImage) return true;
-    if (title && otherTitle && title.slice(0, 45) === otherTitle.slice(0, 45)) return true;
+    if (candidateImage === itemImage) return true;
+
+    if (
+      candidateTitle &&
+      itemTitle &&
+      candidateTitle.slice(0, 50) === itemTitle.slice(0, 50)
+    ) {
+      return true;
+    }
+
+    if (
+      candidateSource === itemSource &&
+      candidateTitle.split(" ").slice(0, 5).join(" ") ===
+        itemTitle.split(" ").slice(0, 5).join(" ")
+    ) {
+      return true;
+    }
 
     return false;
   });
 }
 
-async function aiFilterCandidates({ celebrity, queries, candidates }) {
-  if (!process.env.OPENAI_API_KEY) {
-    return candidates.slice(0, 4);
-  }
+function scoreCandidate(item) {
+  const title = normalize(item.title);
+  const source = normalize(item.source);
+  const link = clean(item.sourceUrl).toLowerCase();
 
-  const candidateText = candidates
-    .map((item, index) => {
-      return `${index}: title="${item.title}", source="${item.source}", query="${item.query}"`;
-    })
-    .join("\n");
+  let score = 0;
 
-  const prompt = `
-You are filtering celebrity outfit inspiration results.
+  if (title.includes("outfit")) score += 4;
+  if (title.includes("street style")) score += 4;
+  if (title.includes("style")) score += 2;
+  if (title.includes("wears")) score += 2;
+  if (title.includes("wearing")) score += 2;
+  if (title.includes("look")) score += 1;
 
-Celebrity: ${celebrity}
+  if (source.includes("vogue")) score += 5;
+  if (source.includes("elle")) score += 5;
+  if (source.includes("harper")) score += 5;
+  if (source.includes("who what wear")) score += 4;
+  if (source.includes("instyle")) score += 4;
+  if (source.includes("people")) score += 3;
+  if (source.includes("glamour")) score += 3;
+  if (source.includes("yahoo")) score += 2;
 
-The user wants images of this celebrity wearing outfits similar to:
-${queries.join("\n")}
+  if (link.includes("instagram")) score -= 4;
+  if (link.includes("pinterest")) score -= 3;
+  if (link.includes("shop")) score -= 3;
+  if (link.includes("resell")) score -= 4;
 
-Candidates:
-${candidateText}
-
-Return JSON only:
-{
-  "keepIndexes": [0, 1, 2]
-}
-
-Rules:
-- Keep only images that are likely actual outfit inspiration of ${celebrity}.
-- Remove unrelated news, engagement, random event photos, duplicate-looking results, shopping/resell pages.
-- Prefer street style, outfit articles, paparazzi style, fashion magazine outfit references.
-- Prefer results matching the clothing terms in the queries.
-- Keep max 4.
-- If unsure, keep fewer.
-`;
-
-  try {
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: "gpt-4.1-mini",
-        text: {
-          format: { type: "json_object" }
-        },
-        input: [
-          {
-            role: "user",
-            content: [
-              { type: "input_text", text: prompt }
-            ]
-          }
-        ]
-      })
-    });
-
-    const data = await response.json();
-
-    const outputText =
-      data.output_text ??
-      data.output
-        ?.flatMap(item => item.content ?? [])
-        ?.map(content => content.text || "")
-        ?.join("")
-        ?.trim();
-
-    if (!response.ok || !outputText) {
-      return candidates.slice(0, 4);
-    }
-
-    const parsed = JSON.parse(outputText);
-    const indexes = Array.isArray(parsed.keepIndexes) ? parsed.keepIndexes : [];
-
-    const selected = indexes
-      .filter(index => Number.isInteger(index))
-      .map(index => candidates[index])
-      .filter(Boolean)
-      .slice(0, 4);
-
-    return selected.length > 0 ? selected : candidates.slice(0, 4);
-  } catch {
-    return candidates.slice(0, 4);
-  }
+  return score;
 }
 
 export default async function handler(req, res) {
@@ -197,7 +163,7 @@ export default async function handler(req, res) {
         ? data.images_results
         : [];
 
-      for (const item of images.slice(0, 8)) {
+      for (const item of images.slice(0, 10)) {
         if (isObviouslyBad(item, celebrity)) continue;
 
         const imageUrl = clean(item.thumbnail) || clean(item.original);
@@ -216,24 +182,30 @@ export default async function handler(req, res) {
           query: searchQuery
         };
 
+        candidate.score = scoreCandidate(candidate);
+
         if (!isDuplicate(candidate, allCandidates)) {
           allCandidates.push(candidate);
         }
       }
     }
 
-    const aiSelected = await aiFilterCandidates({
-      celebrity,
-      queries,
-      candidates: allCandidates.slice(0, 12)
-    });
+    allCandidates.sort((a, b) => b.score - a.score);
 
     const finalItems = [];
 
-    for (const item of aiSelected) {
+    for (const item of allCandidates) {
       if (!isDuplicate(item, finalItems)) {
-        finalItems.push(item);
+        finalItems.push({
+          id: item.id,
+          title: item.title,
+          imageUrl: item.imageUrl,
+          sourceUrl: item.sourceUrl,
+          source: item.source,
+          query: item.query
+        });
       }
+
       if (finalItems.length >= 4) break;
     }
 
