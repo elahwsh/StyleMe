@@ -28,8 +28,8 @@ export default async function handler(req, res) {
     const isCelebrity = mode === "celebrity";
 
     const userText = isCelebrity
-      ? `Analyze the outfit and restyle it toward ${celebrityName}. Celebrity profile: ${celebrityProfile}. Prioritize the smallest changes possible. Keep items that already work. Only swap items that clearly need changing. Create image search queries that match the exact swap/add suggestions.`
-      : `Analyze the outfit and style it toward ${targetStyle}. Prioritize the smallest changes possible. Keep items that already work. Only swap items that clearly need changing.`;
+      ? `Analyze the uploaded outfit and restyle it toward ${celebrityName}. Celebrity profile: ${celebrityProfile}. Prioritize the smallest changes possible. Keep items that already work. Only swap items that clearly need changing. Create celebrity image-search queries based only on the final suggested changes.`
+      : `Analyze the uploaded outfit and style it toward ${targetStyle}. Prioritize the smallest changes possible. Keep items that already work. Only swap items that clearly need changing.`;
 
     const systemInstruction = `
 Return JSON only.
@@ -72,18 +72,21 @@ CRITICAL LOGIC RULES:
 
 CELEBRITY MODE RULES:
 - If mode is celebrity, make suggestions that move the outfit toward the celebrity while preserving most of the user’s outfit.
-- celebrityInspoQueries must match the exact recommended look.
-- If the suggestion says "oversized blazer", the query must search for the celebrity wearing an oversized blazer.
-- If the suggestion says "crop top", the query must search for the celebrity wearing a crop top.
-- Do not search random celebrity outfits.
-- Do not suggest "crop top" then search/show "coat" or unrelated outfit.
+- celebrityInspoQueries must be based ONLY on the final swap/add/styleDirections.
 - celebrityInspoQueries exactly 4 search queries.
-- Each query must include the celebrity name.
-- Each query should include exact clothing terms from swap/add/styleDirections.
-- Example: "Rihanna oversized blazer denim jeans street style"
-- Example: "Rihanna crop top wide leg jeans outfit"
-- Example: "Rihanna statement accessories denim outfit"
-- Example: "Rihanna luxury streetwear jeans crop top"
+- Each query must include:
+  1. the celebrity name
+  2. the exact clothing item suggested
+  3. exact color/material if available
+  4. "outfit" or "street style"
+- Do NOT create generic celebrity outfit queries.
+- Do NOT search only the celebrity name.
+- If the suggested change is "add black leather jacket", query must be:
+  "Rihanna black leather jacket outfit street style"
+- If the suggested change is "switch sneakers to pointed black boots", query must be:
+  "Rihanna pointed black boots outfit street style"
+- If the suggested change is "add silver statement necklace", query must be:
+  "Rihanna silver statement necklace outfit"
 
 STYLE RULES:
 - Be specific.
@@ -170,6 +173,7 @@ STYLE RULES:
     }
 
     const keep = safeArray(parsed.keep, 3);
+
     let swap = Array.isArray(parsed.swap)
       ? parsed.swap
           .filter(item =>
@@ -181,7 +185,6 @@ STYLE RULES:
           .slice(0, 1)
       : [];
 
-    // Extra safety: remove swaps that duplicate keep items
     swap = swap.filter(item => {
       const from = item.from.toLowerCase();
       return !keep.some(k => {
@@ -216,7 +219,9 @@ STYLE RULES:
     });
   } catch (error) {
     return res.status(500).json({
-      error: error?.name === "AbortError" ? "OpenAI request timed out" : (error?.message || "Server error")
+      error: error?.name === "AbortError"
+        ? "OpenAI request timed out"
+        : (error?.message || "Server error")
     });
   }
 }
