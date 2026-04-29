@@ -1,4 +1,3 @@
-@@ -1,295 +1,242 @@
 function normalizeScore(score) {
   if (score == null || Number.isNaN(Number(score))) return 0;
   const numeric = Math.round(Number(score));
@@ -54,7 +53,7 @@ export default async function handler(req, res) {
       ? `Analyze the uploaded outfit and restyle it toward ${celebrityName}. Celebrity profile: ${celebrityProfile}. Prioritize the smallest changes possible. Keep items that already work. Only swap items that clearly need changing.`
       : `Analyze the uploaded outfit and style it toward ${targetStyle}. Prioritize the smallest changes possible. Keep items that already work. Only swap items that clearly need changing.`;
 
-const systemInstruction = `
+  const systemInstruction = `
 Return JSON only.
 
 You are a PROFESSIONAL fashion stylist with formal training.
@@ -152,7 +151,7 @@ CRITICAL FASHION RULES (STRICT)
 OUTPUT RULES
 
 - Keep max 3 items
-- Swap max 2 item
+- Swap max 1 item
 - Add max 3 items
 - Avoid max 2 items
 - StyleDirections = 2 short, clear directions
@@ -163,7 +162,6 @@ OUTPUT RULES
 
 Be precise. Be realistic. Be stylist-level professional.
 No fluff. No creativity without structure.
-`;
 PROFESSIONAL STYLIST OUTPUT RULES:
 - Think like a real stylist building a complete look, not a basic checklist.
 - Always consider:
@@ -221,6 +219,7 @@ CELEBRITY STYLE RULES:
   - prioritize minimal basics, oversized blazer, clean sneakers/loafers, gold hoops, sleek bun, shoulder bag.
 - For Dove Cameron:
   - prioritize dark romantic, corset/bustier shapes, mini skirt or tailored pants, black boots, silver jewelry, soft glam accessories.
+`;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 25000);
