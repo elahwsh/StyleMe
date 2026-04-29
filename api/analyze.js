@@ -1,5 +1,4 @@
-// api/analyze.js
-
+@@ -1,295 +1,242 @@
 function normalizeScore(score) {
   if (score == null || Number.isNaN(Number(score))) return 0;
   const numeric = Math.round(Number(score));
@@ -8,165 +7,29 @@ function normalizeScore(score) {
 }
 
 function safeArray(value, max = 4) {
-  return Array.isArray(value)
-    ? value
-        .map(item => (typeof item === "string" ? item.trim() : item))
-        .filter(Boolean)
-        .slice(0, max)
-    : [];
+  return Array.isArray(value) ? value.slice(0, max) : [];
 }
 
-function normalizeText(value) {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function cleanKeepSwapConflicts(keep, swap) {
-  return swap.filter(item => {
-    const from = normalizeText(item.from).toLowerCase();
-    if (!from) return false;
-
-    return !keep.some(k => {
-      const kept = normalizeText(k).toLowerCase();
-      return kept && (kept.includes(from) || from.includes(kept));
-    });
-  });
-}
-
-function normalizeShopFor(value) {
-  if (!Array.isArray(value)) return [];
-
-  const allowedCategories = new Set([
-    "tops",
-    "pants",
-    "shoes",
-    "outerwear",
-    "accessories",
-    "dresses",
-    "other"
-  ]);
-
-  return value
-    .filter(
-      item =>
-        item &&
-        typeof item.query === "string" &&
-        typeof item.reason === "string"
-    )
-    .map(item => {
-      const category = normalizeText(item.category || "other").toLowerCase();
-
-      return {
-        query: normalizeText(item.query),
-        reason: normalizeText(item.reason),
-        category: allowedCategories.has(category) ? category : "other"
-      };
-    })
-    .filter(item => item.query && item.reason)
-    .slice(0, 6);
-}
-
+// 🔥 NEW: extract concrete clothing tags for matching
 function extractTags(result) {
   const tags = [];
 
-  result.swap?.forEach(item => {
-    if (item?.to) tags.push(item.to);
+  // prioritize actual changes
+  result.swap?.forEach(s => {
+    if (s.to) tags.push(s.to);
   });
 
-  result.add?.forEach(item => {
-    if (typeof item === "string") tags.push(item);
-  });
+  result.add?.forEach(a => tags.push(a));
 
-  result.shopFor?.forEach(item => {
-    if (item?.query) tags.push(item.query);
-  });
-
+  // fallback to kept items if needed
   if (tags.length < 3) {
-    result.keep?.forEach(item => {
-      if (typeof item === "string") tags.push(item);
-    });
+    result.keep?.forEach(k => tags.push(k));
   }
 
-  return [
-    ...new Set(
-      tags
-        .map(tag => normalizeText(tag).toLowerCase())
-        .filter(Boolean)
-    )
-  ].slice(0, 8);
-}
-
-function buildFallbackResult(isCelebrity) {
-  return {
-    score: 65,
-    detectedVibe: "Casual everyday outfit",
-    colors: ["white", "grey"],
-    materials: ["cotton", "jersey"],
-    styleTags: ["casual", "minimal", "relaxed"],
-    keep: ["white fitted top"],
-    swap: [
-      {
-        from: "grey sweatpants",
-        to: "straight-leg tailored trousers",
-        why: "The sweatpants make the outfit feel too lounge-based; structured trousers create a cleaner styled look."
-      }
-    ],
-    add: ["small shoulder bag", "simple hoop earrings", "sleek sunglasses"],
-    avoid: ["mixing lounge bottoms with polished accessories"],
-    styleDirections: [
-      "Keep the fitted top, but elevate the base with structured bottoms.",
-      "Use minimal accessories that stay within the white and grey palette."
-    ],
-    shopFor: [
-      {
-        query: "women's grey straight leg tailored trousers",
-        reason: "Replaces the lounge bottom with a polished base.",
-        category: "pants"
-      },
-      {
-        query: "women's black pointed ankle boots block heel",
-        reason: "Adds a sleek shoe that makes the outfit feel intentional.",
-        category: "shoes"
-      },
-      {
-        query: "women's black mini shoulder bag",
-        reason: "Finishes the outfit without cluttering it.",
-        category: "accessories"
-      },
-      {
-        query: "women's silver small hoop earrings",
-        reason: "Adds a clean minimal accessory.",
-        category: "accessories"
-      },
-      {
-        query: "women's narrow black sunglasses",
-        reason: "Adds a model-off-duty styling detail.",
-        category: "accessories"
-      }
-    ],
-    celebrityInspoQueries: isCelebrity
-      ? [
-          "celebrity model off duty fitted white top tailored trousers",
-          "celebrity street style white crop top straight trousers",
-          "celebrity black shoulder bag narrow sunglasses outfit",
-          "celebrity casual chic tailored pants outfit"
-        ]
-      : []
-  };
-}
-
-function extractOutputText(data) {
-  if (typeof data?.output_text === "string") {
-    return data.output_text.trim();
-  }
-
-  const text =
-    data?.output
-      ?.flatMap(item => item.content || [])
-      ?.map(content => content.text || "")
-      ?.join("")
-      ?.trim() || "";
-
-  return text;
+  return tags
+    .map(t => t.toLowerCase().trim())
+    .filter(Boolean)
+    .slice(0, 5);
 }
 
 export default async function handler(req, res) {
@@ -175,35 +38,30 @@ export default async function handler(req, res) {
       return res.status(405).json({ error: "Method not allowed" });
     }
 
+    const { mode, targetStyle, celebrityName, celebrityProfile, imageBase64 } = req.body;
+
     if (!process.env.OPENAI_API_KEY) {
       return res.status(500).json({ error: "Missing OPENAI_API_KEY" });
     }
 
-    const {
-      mode = "style",
-      targetStyle = "Casual Chic",
-      celebrityName = "",
-      celebrityProfile = "",
-      imageBase64
-    } = req.body || {};
-
-    if (!imageBase64 || typeof imageBase64 !== "string") {
+    if (!imageBase64) {
       return res.status(400).json({ error: "Missing imageBase64" });
     }
 
     const isCelebrity = mode === "celebrity";
 
     const userText = isCelebrity
-      ? `Analyze the uploaded outfit and restyle it toward ${celebrityName || "the selected celebrity"}. Celebrity profile: ${celebrityProfile || "Use recognizable celebrity fashion logic only when it supports a wearable outfit."}`
-      : `Analyze the uploaded outfit and style it toward ${targetStyle || "Casual Chic"}.`;
+      ? `Analyze the uploaded outfit and restyle it toward ${celebrityName}. Celebrity profile: ${celebrityProfile}. Prioritize the smallest changes possible. Keep items that already work. Only swap items that clearly need changing.`
+      : `Analyze the uploaded outfit and style it toward ${targetStyle}. Prioritize the smallest changes possible. Keep items that already work. Only swap items that clearly need changing.`;
 
-    const systemInstruction = `
-Return JSON only. No markdown. No extra text.
+const systemInstruction = `
+Return JSON only.
 
-You are a professional fashion stylist with formal fashion knowledge.
-You must build wearable, cohesive, realistic looks.
+You are a PROFESSIONAL fashion stylist with formal training.
+You follow real-world styling rules, not experimental or chaotic outfits.
 
-Output exact JSON:
+OUTPUT EXACT JSON:
+
 {
   "score": 0,
   "detectedVibe": "",
@@ -218,96 +76,163 @@ Output exact JSON:
   "avoid": [],
   "styleDirections": [],
   "shopFor": [
-    { "query": "", "reason": "", "category": "" }
+    { "query": "", "reason": "" }
   ],
   "celebrityInspoQueries": []
 }
 
-CRITICAL RULES:
-- Build one clear aesthetic.
-- Do not mix incompatible aesthetics.
-- Do not pair sporty lounge pieces with classy, glam, tailored, luxury, or editorial pieces.
-- If the current outfit is too casual for the target style, swap the casual base item first.
-- Do not simply add fancy pieces on top of a weak base outfit.
-- Fix the base outfit first, then add finishing accessories.
-- Suggestions must be wearable, intentional, realistic, and specific.
-- No body shaming.
-- No attractiveness ratings.
+--------------------------------------------------
+CRITICAL FASHION RULES (STRICT)
+--------------------------------------------------
 
-STYLE CONSISTENCY:
-- Avoid sporty + classy.
-- Avoid gymwear + formal.
-- Avoid lounge + luxury tailoring.
-- Avoid athletic polyester + wool tailoring.
-- Avoid casual sneakers with glam or elegant looks unless target is intentionally casual.
-- Use one main vibe only.
+1. STYLE CONSISTENCY
+- Do NOT mix incompatible aesthetics:
+  ❌ sporty + elegant
+  ❌ gymwear + formal
+  ❌ streetwear + business formal
+  ❌ lounge + luxury tailoring
 
-SILHOUETTE:
-- Fitted top works with relaxed or tailored bottoms.
-- Oversized top needs slimmer or structured bottoms.
-- Cropped top with low-rise sweatpants is very casual; for elevated styling, swap bottoms.
-- Wide-leg tailored pants, straight trousers, structured denim, mini skirts, or sleek boots can elevate a simple top.
-- Avoid bulky-on-bulky unless intentionally streetwear.
+- Keep ONE coherent vibe only.
 
-COLOR:
-- Use 2 to 3 main colors.
-- Prefer monochrome, tonal, neutral plus accent, or clean contrast.
-- Avoid random color additions.
+--------------------------------------------------
 
-ACCESSORIES:
-- Suggest 1 to 3 accessories max.
-- Accessories must support the outfit.
-- Good options: narrow sunglasses, shoulder bags, hoop earrings, layered necklaces, belts, watches, hair clips, scarves, sleek handbags.
+2. SILHOUETTE BALANCE
+- Maintain proportional balance:
+  - fitted top → looser bottom
+  - oversized top → structured or slimmer bottom
+- Avoid bulky-on-bulky unless intentionally styled (rare)
 
-CELEBRITY MODE:
-- Adapt toward the celebrity while preserving only items that truly work.
-- Do not preserve an item just because it exists.
-- If an item blocks the celebrity style, swap it.
-- Bella Hadid/model-off-duty: fitted tops, tailored trousers, low-rise or straight-leg bottoms, narrow sunglasses, shoulder bags, pointed boots, loafers, appropriate leather jackets, simple jewelry.
-- Hailey Bieber: clean basics, oversized blazer, straight jeans/trousers, loafers, clean sneakers, gold hoops, sleek shoulder bag.
-- Dove Cameron: dark romantic styling, corset shapes, mini skirts or tailored pants, black boots, silver jewelry.
-- Kendall Jenner: sleek minimal styling, fitted tops, straight trousers, pointed boots/heels, simple bags.
-- Rihanna: bold coherent styling, statement outerwear, luxury streetwear only when base supports it.
-- Zendaya: polished editorial tailoring, strong silhouette, refined accessories.
+--------------------------------------------------
 
-KEEP/SWAP:
-- keep max 3.
-- swap max 1.
-- Never keep and swap the same item.
-- If sweatpants, gym leggings, athletic shorts, or very casual sneakers clash with target style, swap them.
-- add max 4.
-- avoid max 2.
-- styleDirections exactly 2 short professional directions.
+3. COLOR THEORY
+- Stay within 2–3 main colors
+- Avoid clashing palettes
+- Prefer:
+  - monochrome
+  - neutral + accent
+  - tonal layering
 
-SHOPPING:
-- shopFor must include 5 to 6 items.
-- Include one base clothing item if needed.
-- Include one shoe item.
-- Include one bag or jewelry item.
-- Include one styling accessory.
-- Include one optional finishing piece.
-- Queries must be specific and product-search friendly.
-- Category must be exactly one of:
-  "tops", "pants", "shoes", "outerwear", "accessories", "dresses", "other"
+--------------------------------------------------
 
-LIMITS:
-- colors max 4.
-- materials max 4.
-- styleTags max 4.
-- celebrityInspoQueries exactly 4 only if celebrity mode, otherwise [].
+4. MATERIAL COMPATIBILITY
+- Do NOT mix conflicting fabrics:
+  ❌ athletic polyester with wool tailoring
+  ❌ gym leggings with structured blazers
+- Keep textures aligned (casual vs refined)
+
+--------------------------------------------------
+
+5. OCCASION AWARENESS
+- Outfit must make sense for real life:
+  - university → casual / clean
+  - dinner → elevated casual / chic
+  - party → statement but cohesive
+- No impractical styling
+
+--------------------------------------------------
+
+6. MINIMAL CHANGE RULE
+- Keep existing outfit whenever possible
+- Swap ONLY if necessary
+- Add subtle upgrades (accessories, layering)
+
+--------------------------------------------------
+
+7. PROFESSIONAL STYLIST BEHAVIOR
+- No random suggestions
+- No experimental or “edgy for no reason”
+- Everything must feel:
+  ✔ wearable
+  ✔ intentional
+  ✔ cohesive
+  ✔ realistic
+
+--------------------------------------------------
+
+OUTPUT RULES
+
+- Keep max 3 items
+- Swap max 2 item
+- Add max 3 items
+- Avoid max 2 items
+- StyleDirections = 2 short, clear directions
+- ShopFor = EXACTLY 3 relevant items only
+- Never contradict (no item in both keep and swap)
+
+--------------------------------------------------
+
+Be precise. Be realistic. Be stylist-level professional.
+No fluff. No creativity without structure.
 `;
+PROFESSIONAL STYLIST OUTPUT RULES:
+- Think like a real stylist building a complete look, not a basic checklist.
+- Always consider:
+  1. silhouette
+  2. proportion
+  3. color palette
+  4. texture/material
+  5. shoe choice
+  6. bag choice
+  7. jewelry/accessories
+  8. occasion
+  9. target celebrity/style reference
+
+- If the current outfit is too casual for the target style, do not simply add fancy items on top.
+- First fix the base outfit, then add accessories.
+- A good look must include a coherent base + shoes + accessory direction.
+- Do not suggest random accessories; accessories must support the outfit vibe.
+
+SHOPPING RULES:
+- shopFor must include exactly 5 items.
+- shopFor must include at least:
+  1. one clothing base item if needed
+  2. one shoe item
+  3. one bag OR jewelry item
+  4. one styling accessory
+  5. one optional finishing piece
+
+- Each shopFor query must be specific enough for product search.
+- Bad query: "pants"
+- Good query: "women's low rise wide leg tailored trousers brown"
+- Bad query: "jewelry"
+- Good query: "women's silver chunky hoop earrings"
+- Bad query: "shoes"
+- Good query: "women's pointed black ankle boots block heel"
+
+ACCESSORY RULES:
+- Always suggest accessories if they improve the look.
+- Accessories can include:
+  - belts
+  - sunglasses
+  - hoop earrings
+  - layered necklaces
+  - shoulder bags
+  - claw clips
+  - hair accessories
+  - watches
+  - scarves
+- Avoid over-accessorizing. Usually 1–3 accessories is enough.
+
+CELEBRITY STYLE RULES:
+- For Bella Hadid / model-off-duty:
+  - prioritize clean proportions, fitted tops, tailored bottoms, narrow sunglasses, shoulder bags, pointed boots, loafers, leather jackets, simple jewelry.
+  - do NOT pair sweatpants with leather jacket unless the target is sporty streetwear.
+- For Hailey Bieber:
+  - prioritize minimal basics, oversized blazer, clean sneakers/loafers, gold hoops, sleek bun, shoulder bag.
+- For Dove Cameron:
+  - prioritize dark romantic, corset/bustier shapes, mini skirt or tailored pants, black boots, silver jewelry, soft glam accessories.
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 40000);
+    const timeout = setTimeout(() => controller.abort(), 25000);
 
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model: "gpt-4.1-mini",
         text: {
           format: { type: "json_object" }
         },
@@ -334,86 +259,90 @@ LIMITS:
 
     clearTimeout(timeout);
 
-    const data = await response.json().catch(() => null);
+    const data = await response.json();
 
     if (!response.ok) {
-      console.error("OpenAI API error:", data);
-      return res.status(response.status).json({
-        error: data?.error?.message || "OpenAI request failed",
+      return res.status(response.status).json(data);
+    }
+
+    const outputText =
+      data.output_text ??
+      data.output
+        ?.flatMap(item => item.content ?? [])
+        ?.map(content => content.text || "")
+        ?.join("")
+        ?.trim();
+
+    if (!outputText) {
+      return res.status(500).json({
+        error: "No output text returned from OpenAI",
         raw: data
       });
     }
 
-    const outputText = extractOutputText(data);
-
-    if (!outputText) {
-      console.error("No OpenAI output:", data);
-      const fallback = buildFallbackResult(isCelebrity);
-      fallback.tagsToMatch = extractTags(fallback);
-      return res.status(200).json(fallback);
-    }
-
     let parsed;
-
     try {
       parsed = JSON.parse(outputText);
-    } catch (error) {
-      console.error("Invalid JSON from model:", outputText);
-      const fallback = buildFallbackResult(isCelebrity);
-      fallback.tagsToMatch = extractTags(fallback);
-      return res.status(200).json(fallback);
+    } catch {
+      return res.status(500).json({
+        error: "Invalid JSON from model",
+        raw: outputText
+      });
     }
 
-    const keep = safeArray(parsed.keep, 3).map(String);
+    const keep = safeArray(parsed.keep, 3);
 
     let swap = Array.isArray(parsed.swap)
       ? parsed.swap
-          .filter(
-            item =>
-              item &&
-              typeof item.from === "string" &&
-              typeof item.to === "string" &&
-              typeof item.why === "string"
+          .filter(item =>
+            item &&
+            typeof item.from === "string" &&
+            typeof item.to === "string" &&
+            typeof item.why === "string"
           )
-          .map(item => ({
-            from: normalizeText(item.from),
-            to: normalizeText(item.to),
-            why: normalizeText(item.why)
-          }))
-          .filter(item => item.from && item.to && item.why)
           .slice(0, 1)
       : [];
 
-    swap = cleanKeepSwapConflicts(keep, swap);
+    // 🔥 prevent keep/swap conflict
+    swap = swap.filter(item => {
+      const from = item.from.toLowerCase();
+      return !keep.some(k => {
+        const kept = k.toLowerCase();
+        return kept.includes(from) || from.includes(kept);
+      });
+    });
 
     const result = {
       score: normalizeScore(parsed.score),
-      detectedVibe: normalizeText(parsed.detectedVibe),
-      colors: safeArray(parsed.colors, 4).map(String),
-      materials: safeArray(parsed.materials, 4).map(String),
-      styleTags: safeArray(parsed.styleTags, 4).map(String),
+      detectedVibe: typeof parsed.detectedVibe === "string" ? parsed.detectedVibe : "",
+      colors: safeArray(parsed.colors, 4),
+      materials: safeArray(parsed.materials, 4),
+      styleTags: safeArray(parsed.styleTags, 4),
       keep,
       swap,
-      add: safeArray(parsed.add, 4).map(String),
-      avoid: safeArray(parsed.avoid, 2).map(String),
-      styleDirections: safeArray(parsed.styleDirections, 2).map(String),
-      shopFor: normalizeShopFor(parsed.shopFor),
+      add: safeArray(parsed.add, 3),
+      avoid: safeArray(parsed.avoid, 2),
+      styleDirections: safeArray(parsed.styleDirections, 2),
+      shopFor: Array.isArray(parsed.shopFor)
+        ? parsed.shopFor
+            .filter(item =>
+              item &&
+              typeof item.query === "string" &&
+              typeof item.reason === "string"
+            )
+            .slice(0, 3)
+        : [],
       celebrityInspoQueries: isCelebrity
-        ? safeArray(parsed.celebrityInspoQueries, 4).map(String)
+        ? safeArray(parsed.celebrityInspoQueries, 4)
         : []
     };
 
-    if (result.shopFor.length < 5) {
-      const fallback = buildFallbackResult(isCelebrity);
-      result.shopFor = fallback.shopFor;
-    }
-
+    // ✅ NEW: attach tags for curated library matching
     result.tagsToMatch = extractTags(result);
 
     return res.status(200).json(result);
-  } catch (error) {
-    console.error("FULL ANALYZE ERROR:", error);
 
+  } catch (error) {
     return res.status(500).json({
       error:
         error?.name === "AbortError"
