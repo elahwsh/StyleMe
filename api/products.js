@@ -10,49 +10,57 @@ function normalizeShopFor(shopFor) {
   return shopFor
     .map(item => {
       if (typeof item === "string") return item.trim();
-
-      if (item && typeof item.query === "string") {
-        return item.query.trim();
-      }
-
+      if (item && typeof item.query === "string") return item.query.trim();
       return "";
     })
     .filter(Boolean)
     .slice(0, 3);
 }
 
+function inferCategory(text) {
+  const value = cleanText(text).toLowerCase();
+
+  if (/(pants|trouser|jeans|leggings|joggers|sweatpants|shorts|skirt)/.test(value)) {
+    return "pants";
+  }
+
+  if (/(top|shirt|blouse|tank|tee|t-shirt|corset|bodysuit|sweater|cardigan|hoodie)/.test(value)) {
+    return "tops";
+  }
+
+  if (/(shoe|boot|boots|heel|heels|sneaker|sneakers|loafer|loafers|flat|flats|sandal|sandals)/.test(value)) {
+    return "shoes";
+  }
+
+  if (/(jacket|coat|blazer|trench|outerwear|leather jacket|puffer|vest)/.test(value)) {
+    return "outerwear";
+  }
+
+  if (/(bag|purse|necklace|earring|earrings|bracelet|belt|sunglasses|glasses|scarf|hat|cap)/.test(value)) {
+    return "accessories";
+  }
+
+  if (/(dress|gown)/.test(value)) {
+    return "dresses";
+  }
+
+  return "other";
+}
+
 function buildFashionQuery(query) {
   const cleaned = cleanText(query);
-
   if (!cleaned) return "";
 
-  const lower = cleaned.toLowerCase();
+  const category = inferCategory(cleaned);
 
-  const fashionWords = [
-    "top",
-    "shirt",
-    "blouse",
-    "pants",
-    "jeans",
-    "skirt",
-    "dress",
-    "jacket",
-    "coat",
-    "cardigan",
-    "sweater",
-    "boots",
-    "heels",
-    "sneakers",
-    "loafers",
-    "bag",
-    "necklace",
-    "earrings",
-    "belt"
-  ];
+  if (category === "pants") return `${cleaned} women's fashion`;
+  if (category === "tops") return `${cleaned} women's fashion`;
+  if (category === "shoes") return `${cleaned} women's fashion`;
+  if (category === "outerwear") return `${cleaned} women's fashion`;
+  if (category === "accessories") return `${cleaned} women's accessories`;
+  if (category === "dresses") return `${cleaned} women's fashion`;
 
-  const alreadyFashion = fashionWords.some(word => lower.includes(word));
-
-  return alreadyFashion ? cleaned : `${cleaned} fashion clothing`;
+  return `${cleaned} women's fashion clothing`;
 }
 
 async function searchSerpApiShopping(query) {
@@ -70,27 +78,19 @@ async function searchSerpApiShopping(query) {
   url.searchParams.set("google_domain", "google.com");
   url.searchParams.set("gl", "us");
   url.searchParams.set("hl", "en");
-  url.searchParams.set("num", "12");
+  url.searchParams.set("num", "14");
 
   const response = await fetch(url.toString(), {
     method: "GET",
     headers: {
-      "Accept": "application/json"
+      Accept: "application/json"
     }
   });
 
   const data = await response.json();
 
-  if (!response.ok) {
-    throw new Error(
-      data.error ||
-      data.search_metadata?.status ||
-      "SerpApi request failed"
-    );
-  }
-
-  if (data.error) {
-    throw new Error(data.error);
+  if (!response.ok || data.error) {
+    throw new Error(data.error || "SerpApi request failed");
   }
 
   return Array.isArray(data.shopping_results) ? data.shopping_results : [];
@@ -112,6 +112,8 @@ function isBadProduct(item) {
     "men's",
     "mens",
     "boy",
+    "boys",
+    "girl",
     "girls",
     "doll",
     "pattern",
@@ -119,7 +121,10 @@ function isBadProduct(item) {
     "fabric",
     "template",
     "wallpaper",
-    "poster"
+    "poster",
+    "pet",
+    "dog",
+    "cat"
   ];
 
   if (blockedWords.some(word => title.includes(word))) return true;
@@ -130,16 +135,11 @@ function isBadProduct(item) {
 
 function normalizeProduct(item, sourceQuery) {
   const title = cleanText(item.title);
-  const imageURL =
-    cleanText(item.thumbnail) ||
-    cleanText(item.serpapi_thumbnail);
-
-  const purchaseURL =
-    cleanText(item.link) ||
-    cleanText(item.product_link);
-
+  const imageURL = cleanText(item.thumbnail) || cleanText(item.serpapi_thumbnail);
+  const purchaseURL = cleanText(item.link) || cleanText(item.product_link);
   const source = cleanText(item.source);
   const price = cleanText(item.price);
+  const category = inferCategory(`${sourceQuery} ${title}`);
 
   if (!title || !imageURL || !purchaseURL) {
     return null;
@@ -154,7 +154,8 @@ function normalizeProduct(item, sourceQuery) {
     imageURL,
     priceText: price || "Price unavailable",
     purchaseURL,
-    sourceQuery
+    sourceQuery,
+    category
   };
 }
 
