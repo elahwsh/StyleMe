@@ -9,6 +9,28 @@ function safeArray(value, max = 4) {
   return Array.isArray(value) ? value.slice(0, max) : [];
 }
 
+// 🔥 NEW: extract concrete clothing tags for matching
+function extractTags(result) {
+  const tags = [];
+
+  // prioritize actual changes
+  result.swap?.forEach(s => {
+    if (s.to) tags.push(s.to);
+  });
+
+  result.add?.forEach(a => tags.push(a));
+
+  // fallback to kept items if needed
+  if (tags.length < 3) {
+    result.keep?.forEach(k => tags.push(k));
+  }
+
+  return tags
+    .map(t => t.toLowerCase().trim())
+    .filter(Boolean)
+    .slice(0, 5);
+}
+
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
@@ -28,7 +50,7 @@ export default async function handler(req, res) {
     const isCelebrity = mode === "celebrity";
 
     const userText = isCelebrity
-      ? `Analyze the uploaded outfit and restyle it toward ${celebrityName}. Celebrity profile: ${celebrityProfile}. Prioritize the smallest changes possible. Keep items that already work. Only swap items that clearly need changing. Create celebrity image-search queries based only on the final suggested changes.`
+      ? `Analyze the uploaded outfit and restyle it toward ${celebrityName}. Celebrity profile: ${celebrityProfile}. Prioritize the smallest changes possible. Keep items that already work. Only swap items that clearly need changing.`
       : `Analyze the uploaded outfit and style it toward ${targetStyle}. Prioritize the smallest changes possible. Keep items that already work. Only swap items that clearly need changing.`;
 
     const systemInstruction = `
@@ -62,31 +84,11 @@ CRITICAL LOGIC RULES:
 - Do NOT suggest changing everything.
 - Keep at least 1 existing item if it reasonably fits the target style.
 - Never put the same clothing item in both "keep" and "swap".
-- If an item is in keep, do not mention switching it.
-- If an item is in swap, do not list it in keep.
 - Swap max 1 item unless absolutely necessary.
 - Add should be accessories/layers/shoes that improve the outfit without replacing the whole outfit.
-- Avoid should be general styling mistakes, not items already worn unless they truly clash.
+- Avoid should be general styling mistakes.
 - StyleDirections must explain how to style the existing outfit with minimal changes.
 - ShopFor must match the add/swap suggestions exactly.
-
-CELEBRITY MODE RULES:
-- If mode is celebrity, make suggestions that move the outfit toward the celebrity while preserving most of the user’s outfit.
-- celebrityInspoQueries must be based ONLY on the final swap/add/styleDirections.
-- celebrityInspoQueries exactly 4 search queries.
-- Each query must include:
-  1. the celebrity name
-  2. the exact clothing item suggested
-  3. exact color/material if available
-  4. "outfit" or "street style"
-- Do NOT create generic celebrity outfit queries.
-- Do NOT search only the celebrity name.
-- If the suggested change is "add black leather jacket", query must be:
-  "Rihanna black leather jacket outfit street style"
-- If the suggested change is "switch sneakers to pointed black boots", query must be:
-  "Rihanna pointed black boots outfit street style"
-- If the suggested change is "add silver statement necklace", query must be:
-  "Rihanna silver statement necklace outfit"
 
 STYLE RULES:
 - Be specific.
@@ -99,7 +101,6 @@ STYLE RULES:
 - Avoid max 2 items.
 - StyleDirections exactly 2 short directions.
 - ShopFor exactly 3 short shopping queries.
-- Do not mention body type, torso, proportions, skin tone, or attractiveness.
 - No markdown.
 - No explanations outside JSON.
 `;
@@ -185,6 +186,7 @@ STYLE RULES:
           .slice(0, 1)
       : [];
 
+    // 🔥 prevent keep/swap conflict
     swap = swap.filter(item => {
       const from = item.from.toLowerCase();
       return !keep.some(k => {
@@ -193,7 +195,7 @@ STYLE RULES:
       });
     });
 
-    return res.status(200).json({
+    const result = {
       score: normalizeScore(parsed.score),
       detectedVibe: typeof parsed.detectedVibe === "string" ? parsed.detectedVibe : "",
       colors: safeArray(parsed.colors, 4),
@@ -216,12 +218,19 @@ STYLE RULES:
       celebrityInspoQueries: isCelebrity
         ? safeArray(parsed.celebrityInspoQueries, 4)
         : []
-    });
+    };
+
+    // ✅ NEW: attach tags for curated library matching
+    result.tagsToMatch = extractTags(result);
+
+    return res.status(200).json(result);
+
   } catch (error) {
     return res.status(500).json({
-      error: error?.name === "AbortError"
-        ? "OpenAI request timed out"
-        : (error?.message || "Server error")
+      error:
+        error?.name === "AbortError"
+          ? "OpenAI request timed out"
+          : error?.message || "Server error"
     });
   }
 }
