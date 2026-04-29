@@ -1,13 +1,7 @@
+const SERPAPI_ENDPOINT = "https://serpapi.com/search.json";
+
 function cleanText(value) {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function normalizePrice(price) {
-  if (!price || !price.value || !price.currency) {
-    return "Price unavailable";
-  }
-
-  return `${price.currency} ${price.value}`;
 }
 
 function normalizeShopFor(shopFor) {
@@ -16,58 +10,72 @@ function normalizeShopFor(shopFor) {
   return shopFor
     .map(item => {
       if (typeof item === "string") return item.trim();
-      if (item && typeof item.query === "string") return item.query.trim();
+
+      if (item && typeof item.query === "string") {
+        return item.query.trim();
+      }
+
       return "";
     })
     .filter(Boolean)
     .slice(0, 3);
 }
 
-async function getEbayAccessToken() {
-  const clientId = process.env.EBAY_CLIENT_ID;
-  const clientSecret = process.env.EBAY_CLIENT_SECRET;
+function buildFashionQuery(query) {
+  const cleaned = cleanText(query);
 
-  if (!clientId || !clientSecret) {
-    throw new Error("Missing EBAY_CLIENT_ID or EBAY_CLIENT_SECRET");
-  }
+  if (!cleaned) return "";
 
-  const encodedCredentials = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+  const lower = cleaned.toLowerCase();
 
-  const response = await fetch("https://api.ebay.com/identity/v1/oauth2/token", {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${encodedCredentials}`,
-      "Content-Type": "application/x-www-form-urlencoded"
-    },
-    body: "grant_type=client_credentials&scope=https://api.ebay.com/oauth/api_scope"
-  });
+  const fashionWords = [
+    "top",
+    "shirt",
+    "blouse",
+    "pants",
+    "jeans",
+    "skirt",
+    "dress",
+    "jacket",
+    "coat",
+    "cardigan",
+    "sweater",
+    "boots",
+    "heels",
+    "sneakers",
+    "loafers",
+    "bag",
+    "necklace",
+    "earrings",
+    "belt"
+  ];
 
-  const data = await response.json();
+  const alreadyFashion = fashionWords.some(word => lower.includes(word));
 
-  if (!response.ok) {
-    throw new Error(
-      data.error_description ||
-      data.error ||
-      "Failed to authenticate with eBay"
-    );
-  }
-
-  return data.access_token;
+  return alreadyFashion ? cleaned : `${cleaned} fashion clothing`;
 }
 
-async function searchEbayProducts(query, accessToken) {
-  const url = new URL("https://api.ebay.com/buy/browse/v1/item_summary/search");
+async function searchSerpApiShopping(query) {
+  const apiKey = process.env.SERPAPI_KEY;
 
-  url.searchParams.set("q", query);
-  url.searchParams.set("limit", "8");
-  url.searchParams.set("category_ids", "11450");
+  if (!apiKey) {
+    throw new Error("Missing SERPAPI_KEY");
+  }
+
+  const url = new URL(SERPAPI_ENDPOINT);
+
+  url.searchParams.set("engine", "google_shopping");
+  url.searchParams.set("q", buildFashionQuery(query));
+  url.searchParams.set("api_key", apiKey);
+  url.searchParams.set("google_domain", "google.com");
+  url.searchParams.set("gl", "us");
+  url.searchParams.set("hl", "en");
+  url.searchParams.set("num", "12");
 
   const response = await fetch(url.toString(), {
     method: "GET",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-      "X-EBAY-C-MARKETPLACE-ID": "EBAY_US"
+      "Accept": "application/json"
     }
   });
 
@@ -75,39 +83,76 @@ async function searchEbayProducts(query, accessToken) {
 
   if (!response.ok) {
     throw new Error(
-      data.errors?.[0]?.message ||
-      data.error_description ||
-      "eBay product search failed"
+      data.error ||
+      data.search_metadata?.status ||
+      "SerpApi request failed"
     );
   }
 
-  return Array.isArray(data.itemSummaries) ? data.itemSummaries : [];
+  if (data.error) {
+    throw new Error(data.error);
+  }
+
+  return Array.isArray(data.shopping_results) ? data.shopping_results : [];
 }
 
-function mapEbayItem(item, sourceQuery) {
-  const id = cleanText(item.itemId);
-  const title = cleanText(item.title);
-  const imageURL = cleanText(item.image?.imageUrl);
-  const purchaseURL = cleanText(item.itemWebUrl);
+function isBadProduct(item) {
+  const title = cleanText(item.title).toLowerCase();
+  const source = cleanText(item.source).toLowerCase();
 
-  if (!id || !title || !imageURL || !purchaseURL) {
+  if (!title) return true;
+
+  const blockedWords = [
+    "costume",
+    "halloween",
+    "cosplay",
+    "kids",
+    "toddler",
+    "baby",
+    "men's",
+    "mens",
+    "boy",
+    "girls",
+    "doll",
+    "pattern",
+    "sewing",
+    "fabric",
+    "template",
+    "wallpaper",
+    "poster"
+  ];
+
+  if (blockedWords.some(word => title.includes(word))) return true;
+  if (blockedWords.some(word => source.includes(word))) return true;
+
+  return false;
+}
+
+function normalizeProduct(item, sourceQuery) {
+  const title = cleanText(item.title);
+  const imageURL =
+    cleanText(item.thumbnail) ||
+    cleanText(item.serpapi_thumbnail);
+
+  const purchaseURL =
+    cleanText(item.link) ||
+    cleanText(item.product_link);
+
+  const source = cleanText(item.source);
+  const price = cleanText(item.price);
+
+  if (!title || !imageURL || !purchaseURL) {
     return null;
   }
 
-  const sellerName = cleanText(item.seller?.username);
-  const condition = cleanText(item.condition);
-
-  const subtitleParts = [];
-
-  if (sellerName) subtitleParts.push(sellerName);
-  if (condition) subtitleParts.push(condition);
-
   return {
-    id,
+    id:
+      cleanText(item.product_id) ||
+      Buffer.from(`${title}|${purchaseURL}`).toString("base64"),
     title,
-    subtitle: subtitleParts.length ? subtitleParts.join(" • ") : "Available online",
+    subtitle: source || "Online store",
     imageURL,
-    priceText: normalizePrice(item.price),
+    priceText: price || "Price unavailable",
     purchaseURL,
     sourceQuery
   };
@@ -118,10 +163,11 @@ function dedupeProducts(products) {
   const unique = [];
 
   for (const product of products) {
-    if (!product || !product.id) continue;
-    if (seen.has(product.id)) continue;
+    const key = `${product.title.toLowerCase()}|${product.purchaseURL.toLowerCase()}`;
 
-    seen.add(product.id);
+    if (seen.has(key)) continue;
+
+    seen.add(key);
     unique.push(product);
   }
 
@@ -131,7 +177,9 @@ function dedupeProducts(products) {
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
-      return res.status(405).json({ error: "Method not allowed" });
+      return res.status(405).json({
+        error: "Method not allowed"
+      });
     }
 
     const queries = normalizeShopFor(req.body?.shopFor);
@@ -142,23 +190,26 @@ export default async function handler(req, res) {
       });
     }
 
-    const accessToken = await getEbayAccessToken();
-
-    const products = [];
+    const allProducts = [];
 
     for (const query of queries) {
-      const items = await searchEbayProducts(query, accessToken);
+      const results = await searchSerpApiShopping(query);
 
-      for (const item of items) {
-        const mapped = mapEbayItem(item, query);
-        if (mapped) products.push(mapped);
+      for (const item of results) {
+        if (isBadProduct(item)) continue;
+
+        const product = normalizeProduct(item, query);
+
+        if (product) {
+          allProducts.push(product);
+        }
       }
     }
 
-    const uniqueProducts = dedupeProducts(products).slice(0, 12);
+    const products = dedupeProducts(allProducts).slice(0, 18);
 
     return res.status(200).json({
-      products: uniqueProducts
+      products
     });
   } catch (error) {
     return res.status(500).json({
