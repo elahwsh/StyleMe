@@ -4,89 +4,60 @@ function cleanText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function normalizeShopFor(shopFor) {
-  if (!Array.isArray(shopFor)) return [];
+function normalizeQueries(body) {
+  if (Array.isArray(body?.queries)) {
+    return body.queries
+      .map(q => {
+        if (typeof q === "string") return { searchQuery: q, category: "other", reason: "" };
 
-  return shopFor
-    .map(item => {
-      if (typeof item === "string") return item.trim();
-      if (item && typeof item.query === "string") return item.query.trim();
-      return "";
-    })
-    .filter(Boolean)
-    .slice(0, 3);
-}
-
-function inferCategory(text) {
-  const value = cleanText(text).toLowerCase();
-
-  if (/(pants|trouser|jeans|leggings|joggers|sweatpants|shorts|skirt)/.test(value)) {
-    return "pants";
+        return {
+          searchQuery: cleanText(q.searchQuery || q.suggestedItem || q.query),
+          category: cleanText(q.category || "other"),
+          reason: cleanText(q.reason || "")
+        };
+      })
+      .filter(q => q.searchQuery);
   }
 
-  if (/(top|shirt|blouse|tank|tee|t-shirt|corset|bodysuit|sweater|cardigan|hoodie)/.test(value)) {
-    return "tops";
+  if (Array.isArray(body?.shopFor)) {
+    return body.shopFor
+      .map(item => {
+        if (typeof item === "string") {
+          return { searchQuery: item, category: "other", reason: "" };
+        }
+
+        return {
+          searchQuery: cleanText(item.query),
+          category: cleanText(item.category || "other"),
+          reason: cleanText(item.reason || "")
+        };
+      })
+      .filter(q => q.searchQuery);
   }
 
-  if (/(shoe|boot|boots|heel|heels|sneaker|sneakers|loafer|loafers|flat|flats|sandal|sandals)/.test(value)) {
-    return "shoes";
-  }
-
-  if (/(jacket|coat|blazer|trench|outerwear|leather jacket|puffer|vest)/.test(value)) {
-    return "outerwear";
-  }
-
-  if (/(bag|purse|necklace|earring|earrings|bracelet|belt|sunglasses|glasses|scarf|hat|cap)/.test(value)) {
-    return "accessories";
-  }
-
-  if (/(dress|gown)/.test(value)) {
-    return "dresses";
-  }
-
-  return "other";
+  return [];
 }
 
 function buildFashionQuery(query) {
-  const cleaned = cleanText(query);
-  if (!cleaned) return "";
-
-  const category = inferCategory(cleaned);
-
-  if (category === "pants") return `${cleaned} women's fashion`;
-  if (category === "tops") return `${cleaned} women's fashion`;
-  if (category === "shoes") return `${cleaned} women's fashion`;
-  if (category === "outerwear") return `${cleaned} women's fashion`;
-  if (category === "accessories") return `${cleaned} women's accessories`;
-  if (category === "dresses") return `${cleaned} women's fashion`;
-
-  return `${cleaned} women's fashion clothing`;
+  return `${cleanText(query)} women's fashion`;
 }
 
 async function searchSerpApiShopping(query) {
   const apiKey = process.env.SERPAPI_KEY;
 
   if (!apiKey) {
-    throw new Error("Missing SERPAPI_KEY");
+    throw new Error("Missing SERPAPI_KEY in Vercel environment variables");
   }
 
   const url = new URL(SERPAPI_ENDPOINT);
-
   url.searchParams.set("engine", "google_shopping");
   url.searchParams.set("q", buildFashionQuery(query));
   url.searchParams.set("api_key", apiKey);
-  url.searchParams.set("google_domain", "google.com");
-  url.searchParams.set("gl", "us");
+  url.searchParams.set("gl", "ca");
   url.searchParams.set("hl", "en");
-  url.searchParams.set("num", "14");
+  url.searchParams.set("num", "20");
 
-  const response = await fetch(url.toString(), {
-    method: "GET",
-    headers: {
-      Accept: "application/json"
-    }
-  });
-
+  const response = await fetch(url.toString());
   const data = await response.json();
 
   if (!response.ok || data.error) {
@@ -96,127 +67,78 @@ async function searchSerpApiShopping(query) {
   return Array.isArray(data.shopping_results) ? data.shopping_results : [];
 }
 
-function isBadProduct(item) {
-  const title = cleanText(item.title).toLowerCase();
-  const source = cleanText(item.source).toLowerCase();
-
-  if (!title) return true;
-
-  const blockedWords = [
-    "costume",
-    "halloween",
-    "cosplay",
-    "kids",
-    "toddler",
-    "baby",
-    "men's",
-    "mens",
-    "boy",
-    "boys",
-    "girl",
-    "girls",
-    "doll",
-    "pattern",
-    "sewing",
-    "fabric",
-    "template",
-    "wallpaper",
-    "poster",
-    "pet",
-    "dog",
-    "cat"
-  ];
-
-  if (blockedWords.some(word => title.includes(word))) return true;
-  if (blockedWords.some(word => source.includes(word))) return true;
-
-  return false;
-}
-
-function normalizeProduct(item, sourceQuery) {
+function normalizeProduct(item, queryInfo, index) {
   const title = cleanText(item.title);
-  const imageURL = cleanText(item.thumbnail) || cleanText(item.serpapi_thumbnail);
-  const purchaseURL = cleanText(item.link) || cleanText(item.product_link);
-  const source = cleanText(item.source);
-  const price = cleanText(item.price);
-  const category = inferCategory(`${sourceQuery} ${title}`);
+  const imageURL = cleanText(item.thumbnail || item.serpapi_thumbnail || item.image);
+  const purchaseURL = cleanText(item.link || item.product_link);
+  const subtitle = cleanText(item.source || item.seller || item.merchant) || "Online store";
+  const priceText = cleanText(item.price) || "Price unavailable";
 
-  if (!title || !imageURL || !purchaseURL) {
-    return null;
-  }
+  if (!title || !purchaseURL) return null;
 
   return {
-    id:
-      cleanText(item.product_id) ||
-      Buffer.from(`${title}|${purchaseURL}`).toString("base64"),
+    id: cleanText(item.product_id) || `${queryInfo.searchQuery}-${index}`,
     title,
-    subtitle: source || "Online store",
+    subtitle,
+    priceText,
     imageURL,
-    priceText: price || "Price unavailable",
     purchaseURL,
-    sourceQuery,
-    category
+    category: queryInfo.category || "other",
+    sourceQuery: queryInfo.searchQuery,
+    recommendationReason: queryInfo.reason || "Matches your styling suggestion."
   };
 }
 
-function dedupeProducts(products) {
+function dedupe(products) {
   const seen = new Set();
-  const unique = [];
-
-  for (const product of products) {
-    const key = `${product.title.toLowerCase()}|${product.purchaseURL.toLowerCase()}`;
-
-    if (seen.has(key)) continue;
-
+  return products.filter(p => {
+    const key = p.purchaseURL.toLowerCase();
+    if (seen.has(key)) return false;
     seen.add(key);
-    unique.push(product);
-  }
-
-  return unique;
+    return true;
+  });
 }
 
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
-      return res.status(405).json({
-        error: "Method not allowed"
-      });
+      return res.status(405).json({ products: [], error: "Method not allowed" });
     }
 
-    const queries = Array.isArray(req.body?.queries)
-  ? req.body.queries.map(q => q.searchQuery || q.suggestedItem || "").filter(Boolean)
-  : normalizeShopFor(req.body?.shopFor);
+    const queries = normalizeQueries(req.body);
 
     if (queries.length === 0) {
-      return res.status(400).json({
-        error: "Missing shopFor array"
+      return res.status(200).json({
+        products: [],
+        debug: {
+          message: "No product queries received",
+          receivedBody: req.body
+        }
       });
     }
 
     const allProducts = [];
 
-    for (const query of queries) {
-      const results = await searchSerpApiShopping(query);
+    for (const queryInfo of queries.slice(0, 8)) {
+      const results = await searchSerpApiShopping(queryInfo.searchQuery);
 
-      for (const item of results) {
-        if (isBadProduct(item)) continue;
-
-        const product = normalizeProduct(item, query);
-
-        if (product) {
-          allProducts.push(product);
-        }
-      }
+      results.slice(0, 6).forEach((item, index) => {
+        const product = normalizeProduct(item, queryInfo, index);
+        if (product) allProducts.push(product);
+      });
     }
 
-    const products = dedupeProducts(allProducts).slice(0, 18);
-
     return res.status(200).json({
-      products
+      products: dedupe(allProducts).slice(0, 24),
+      debug: {
+        receivedQueries: queries.map(q => q.searchQuery),
+        productCount: allProducts.length
+      }
     });
   } catch (error) {
     return res.status(500).json({
-      error: error?.message || "Product search failed"
+      products: [],
+      error: error.message || "Product search failed"
     });
   }
 }
