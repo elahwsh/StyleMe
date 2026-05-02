@@ -183,7 +183,9 @@ export default async function handler(req, res) {
       });
     }
 
-    const queries = normalizeShopFor(req.body?.shopFor);
+    const queries = Array.isArray(req.body?.queries)
+  ? req.body.queries.map(q => q.searchQuery || q.suggestedItem || "").filter(Boolean)
+  : normalizeShopFor(req.body?.shopFor);
 
     if (queries.length === 0) {
       return res.status(400).json({
