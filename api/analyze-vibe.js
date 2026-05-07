@@ -87,7 +87,10 @@ Rules:
 - Do not include celebrity names in shopping queries.
 - Do not use vague words like cute, trendy, stylish, aesthetic, vibe, or similar.
 - Generate 1–2 shopping queries per visible category.
-
+- If top and bottom are same material/color, create matching set queries.
+- For denim-on-denim outfits, top and bottom queries must include the same wash color.
+- Add "same wash", "matching denim set", and exact color terms when the look relies on matching denim.
+- Prefer same-store/same-brand set results when possible.
 Good queries:
 - "dark blue denim strapless corset top button front"
 - "dark blue low rise wide leg baggy jeans"
