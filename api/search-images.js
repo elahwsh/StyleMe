@@ -1,7 +1,4 @@
-///for vibe shop ///
-
-
-const SERPAPI_ENDPOINT = "https://serpapi.com/search.json";
+const SERPER_ENDPOINT = "https://google.serper.dev/images";
 
 function cleanText(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -10,15 +7,18 @@ function cleanText(value) {
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
-      return res.status(405).json({ results: [], error: "Method not allowed" });
+      return res.status(405).json({
+        results: [],
+        error: "Method not allowed"
+      });
     }
 
-    const apiKey = process.env.SERPAPI_KEY;
+    const apiKey = process.env.SERPER_API_KEY;
 
     if (!apiKey) {
       return res.status(500).json({
         results: [],
-        error: "Missing SERPAPI_KEY"
+        error: "Missing SERPER_API_KEY"
       });
     }
 
@@ -28,30 +28,35 @@ export default async function handler(req, res) {
       return res.status(200).json({ results: [] });
     }
 
-    const url = new URL(SERPAPI_ENDPOINT);
-    url.searchParams.set("engine", "google_images");
-    url.searchParams.set("q", `${query} outfit fashion street style`);
-    url.searchParams.set("api_key", apiKey);
-    url.searchParams.set("gl", "ca");
-    url.searchParams.set("hl", "en");
+    const response = await fetch(SERPER_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "X-API-KEY": apiKey,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        q: `${query} fashion outfit street style`,
+        gl: "ca",
+        hl: "en",
+        num: 40
+      })
+    });
 
-    const response = await fetch(url.toString());
     const data = await response.json();
 
-    if (!response.ok || data.error) {
-      throw new Error(data.error || "SerpApi image search failed");
+    if (!response.ok) {
+      throw new Error(data.message || "Serper image search failed");
     }
 
-    const images = Array.isArray(data.images_results) ? data.images_results : [];
+    const images = Array.isArray(data.images) ? data.images : [];
 
     const results = images
-      .slice(0, 40)
       .map((item, index) => ({
-        id: cleanText(item.position?.toString()) || `${query}-${index}`,
+        id: `${query}-${index}`,
         title: cleanText(item.title) || query,
-        imageUrl: cleanText(item.original || item.thumbnail),
-        sourceUrl: cleanText(item.link || item.source),
-        sourceName: cleanText(item.source) || "Source"
+        imageUrl: cleanText(item.imageUrl),
+        sourceUrl: cleanText(item.link),
+        sourceName: cleanText(item.source)
       }))
       .filter(item => item.imageUrl && item.sourceUrl);
 
