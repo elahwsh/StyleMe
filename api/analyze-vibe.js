@@ -17,14 +17,15 @@ export default async function handler(req, res) {
     }
 
     const prompt = `
-You are VibeShop, an expert fashion search engine.
+You are VibeShop, a fashion search engine that recreates outfit photos as accurately as possible.
+
+Analyze the outfit image from a professional stylist and fashion buyer point of view.
 
 Your job:
-1. Analyze the outfit image from a stylist point of view.
-2. Identify each visible clothing piece.
-3. Explain why the outfit works: silhouette, color, texture, and fit.
-4. Create shopping queries that can recreate the same vibe as accurately as possible.
-5. Make sure each suggested product would coordinate with the full outfit, not only match one item.
+1. Identify every visible clothing category.
+2. Describe each item with exact color, fit, fabric, texture, length, silhouette, and pattern.
+3. Create precise shopping queries that search for the SAME item style, not just something vaguely similar.
+4. Return shopping queries for ALL visible categories: top, bottom, outerwear, shoes, and accessories.
 
 Return ONLY valid JSON in this exact shape:
 
@@ -32,11 +33,11 @@ Return ONLY valid JSON in this exact shape:
   "title": "short outfit title",
   "vibe": "short aesthetic vibe",
   "colors": ["color 1", "color 2"],
-  "top": "specific top description or null",
-  "bottom": "specific bottom description or null",
-  "outerwear": "specific outerwear description or null",
-  "shoes": "specific shoes description or null",
-  "accessories": ["specific accessory 1"],
+  "top": "exact top description or null",
+  "bottom": "exact bottom description or null",
+  "outerwear": "exact outerwear description or null",
+  "shoes": "exact shoes description or null",
+  "accessories": ["exact accessory 1"],
   "stylistNotes": {
     "silhouette": "why the outfit shape works",
     "colorLogic": "why the colors work together",
@@ -45,24 +46,47 @@ Return ONLY valid JSON in this exact shape:
   },
   "shopFor": [
     {
-      "query": "specific shopping search query",
+      "query": "exact shopping query",
       "category": "top | bottom | shoes | accessory | outerwear | other",
-      "reason": "why this item coordinates with the full outfit",
+      "reason": "why this item matches the exact photo",
       "tier": "budget | midRange | premium"
     }
   ]
 }
 
-Rules:
-- Be specific: color, cut, fabric, fit, neckline, rise, length, heel type, etc.
+CRITICAL RULES:
+- You MUST include shopFor queries for every visible category.
+- If outerwear is visible, include outerwear.
+- If shoes are visible, include shoes.
+- If a bag, glasses, belt, jewelry, or purse is visible, include accessory.
+- First query for each category must be the closest possible match.
+- Second query can be a slightly broader acceptable alternative.
+- Do NOT suggest different garment types.
+- Do NOT suggest different lengths.
+- Do NOT suggest patterns when the original is solid.
+- Do NOT suggest plaid, satin, midi, pencil, pleated, or knit skirts unless the image clearly shows that.
+- If the image shows a solid charcoal gray ultra mini straight skirt, the query must include: charcoal gray, ultra mini, straight, solid, no pattern.
+- If the image shows a blazer, include color, structure, button style, fit, and fabric texture if visible.
+- If the image shows shoes, include color, shape, sole, heel/platform, and shoe type.
+- If the image shows a bag, include color, shape, strap type, and hardware if visible.
+- Keep product queries short but specific.
 - Do not include celebrity names in shopping queries.
-- Do not say "similar" in the query.
-- Queries should sound like real retail searches.
-- Include visible pieces only.
-- For every major category, create 2-3 shopping queries when possible.
-- Include a mix of budget, midRange, and premium tiers.
-- Product suggestions must coordinate together as one outfit.
-- Avoid vague queries like "cute top" or "stylish pants".
+- Do not use vague words like cute, trendy, stylish, aesthetic, vibe, or similar in the query.
+- Use retail-searchable terms only.
+
+GOOD query examples:
+- "camel brown fitted scoop neck ribbed tank top solid"
+- "charcoal gray ultra mini straight tailored skirt solid no pattern"
+- "charcoal gray structured single breasted blazer fitted"
+- "beige monogram platform loafers chunky sole"
+- "burgundy structured shoulder bag gold hardware"
+
+BAD query examples:
+- "gray skirt"
+- "cute mini skirt"
+- "Bella Hadid skirt"
+- "fashion blazer"
+- "similar outfit"
 `;
 
     const response = await fetch("https://api.openai.com/v1/responses", {
@@ -120,7 +144,7 @@ Rules:
 }
 
 function normalizeVibeResponse(data) {
-  return {
+  const normalized = {
     title: safeString(data.title, "Outfit Breakdown"),
     vibe: safeString(data.vibe, "Styled outfit"),
     colors: safeArray(data.colors),
@@ -137,6 +161,103 @@ function normalizeVibeResponse(data) {
     },
     shopFor: normalizeShopFor(data.shopFor)
   };
+
+  normalized.shopFor = addMissingCategoryQueries(normalized);
+
+  return normalized;
+}
+
+function addMissingCategoryQueries(data) {
+  const existing = Array.isArray(data.shopFor) ? data.shopFor : [];
+  const categories = new Set(existing.map(item => item.category));
+
+  const added = [...existing];
+
+  if (data.top && !categories.has("top")) {
+    added.push({
+      query: exactifyQuery(data.top),
+      category: "top",
+      reason: "Matches the visible top in the photo.",
+      tier: "midRange"
+    });
+  }
+
+  if (data.bottom && !categories.has("bottom")) {
+    added.push({
+      query: exactifyQuery(data.bottom),
+      category: "bottom",
+      reason: "Matches the visible bottom in the photo.",
+      tier: "midRange"
+    });
+  }
+
+  if (data.outerwear && !categories.has("outerwear")) {
+    added.push({
+      query: exactifyQuery(data.outerwear),
+      category: "outerwear",
+      reason: "Matches the visible outerwear in the photo.",
+      tier: "midRange"
+    });
+  }
+
+  if (data.shoes && !categories.has("shoes")) {
+    added.push({
+      query: exactifyQuery(data.shoes),
+      category: "shoes",
+      reason: "Matches the visible shoes in the photo.",
+      tier: "midRange"
+    });
+  }
+
+  if (Array.isArray(data.accessories) && data.accessories.length > 0 && !categories.has("accessory")) {
+    data.accessories.slice(0, 3).forEach(accessory => {
+      added.push({
+        query: exactifyQuery(accessory),
+        category: "accessory",
+        reason: "Matches the visible accessory in the photo.",
+        tier: "midRange"
+      });
+    });
+  }
+
+  return added.slice(0, 14);
+}
+
+function exactifyQuery(text) {
+  const clean = safeString(text, "");
+
+  if (!clean) return "";
+
+  const lower = clean.toLowerCase();
+
+  let additions = [];
+
+  if (
+    lower.includes("solid") ||
+    lower.includes("plain") ||
+    lower.includes("no pattern")
+  ) {
+    additions.push("solid no pattern");
+  }
+
+  if (
+    lower.includes("mini") ||
+    lower.includes("micro") ||
+    lower.includes("short skirt")
+  ) {
+    additions.push("ultra mini straight");
+  }
+
+  if (
+    lower.includes("tailored") ||
+    lower.includes("structured")
+  ) {
+    additions.push("tailored structured");
+  }
+
+  const merged = `${clean} ${additions.join(" ")}`.trim();
+
+  return dedupeWords(merged);
 }
 
 function normalizeShopFor(items) {
@@ -144,9 +265,9 @@ function normalizeShopFor(items) {
 
   return items
     .map(item => ({
-      query: safeString(item.query, ""),
+      query: exactifyQuery(safeString(item.query, "")),
       category: normalizeCategory(item.category),
-      reason: safeString(item.reason, "Coordinates with the outfit."),
+      reason: safeString(item.reason, "Matches the exact outfit photo."),
       tier: normalizeTier(item.tier)
     }))
     .filter(item => item.query);
@@ -174,5 +295,24 @@ function safeNullableString(value) {
 
 function safeArray(value) {
   if (!Array.isArray(value)) return [];
-  return value.filter(v => typeof v === "string" && v.trim()).map(v => v.trim());
+  return value
+    .filter(v => typeof v === "string" && v.trim())
+    .map(v => v.trim());
+}
+
+function dedupeWords(text) {
+  const words = text.split(/\s+/);
+  const seen = new Set();
+  const result = [];
+
+  for (const word of words) {
+    const key = word.toLowerCase();
+
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(word);
+    }
+  }
+
+  return result.join(" ");
 }
